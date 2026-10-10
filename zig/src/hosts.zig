@@ -1,3 +1,4 @@
+const file_stat = @import("file_stat.zig");
 const std = @import("std");
 const c = @import("native");
 const process = @import("process.zig");
@@ -163,12 +164,12 @@ fn secureOpen(a: A, config: Config) !Open {
     if (parent < 0) return error.HostsOpenFailed;
     errdefer _ = c.close(parent);
     var parentstat: c.struct_stat = undefined;
-    if (c.fstat(parent, &parentstat) != 0 or parentstat.st_uid != config.uid or (parentstat.st_mode & 0o022) != 0) return error.UnsafeHostsParent;
+    if (file_stat.fstat(parent, &parentstat) != 0 or parentstat.st_uid != config.uid or (parentstat.st_mode & 0o022) != 0) return error.UnsafeHostsParent;
     const file = c.openat(parent, base, c.O_RDONLY | c.O_NOFOLLOW | c.O_CLOEXEC);
     if (file < 0) return error.HostsOpenFailed;
     errdefer _ = c.close(file);
     var stat: c.struct_stat = undefined;
-    if (c.fstat(file, &stat) != 0 or (stat.st_mode & c.S_IFMT) != c.S_IFREG or (stat.st_mode & 0o777) != config.mode or stat.st_uid != config.uid or stat.st_gid != config.gid) return error.UnsafeHostsFile;
+    if (file_stat.fstat(file, &stat) != 0 or (stat.st_mode & c.S_IFMT) != c.S_IFREG or (stat.st_mode & 0o777) != config.mode or stat.st_uid != config.uid or stat.st_gid != config.gid) return error.UnsafeHostsFile;
     return .{ .parent = parent, .file = file, .stat = stat, .base = base };
 }
 fn read(a: A, fd: c_int) ![]u8 {
@@ -226,12 +227,12 @@ pub fn apply(a: A, io: std.Io, config: Config, p: Plan) !bool {
     if (lock < 0) return error.HostsLockFailed;
     defer _ = c.close(lock);
     var lockstat: c.struct_stat = undefined;
-    if (c.fstat(lock, &lockstat) != 0 or lockstat.st_uid != config.uid or lockstat.st_gid != config.gid or (lockstat.st_mode & 0o777) != 0o600 or (lockstat.st_mode & c.S_IFMT) != c.S_IFREG) return error.UnsafeHostsLock;
+    if (file_stat.fstat(lock, &lockstat) != 0 or lockstat.st_uid != config.uid or lockstat.st_gid != config.gid or (lockstat.st_mode & 0o777) != 0o600 or (lockstat.st_mode & c.S_IFMT) != c.S_IFREG) return error.UnsafeHostsLock;
     if (c.flock(lock, c.LOCK_EX) != 0) return error.HostsLockFailed;
     var current_lock: c.struct_stat = undefined;
     var current_file: c.struct_stat = undefined;
-    if (c.fstatat(opened.parent, ".dotlocal-hosts.lock", &current_lock, c.AT_SYMLINK_NOFOLLOW) != 0 or current_lock.st_dev != lockstat.st_dev or current_lock.st_ino != lockstat.st_ino) return error.UnsafeHostsLock;
-    if (c.fstatat(opened.parent, opened.base, &current_file, c.AT_SYMLINK_NOFOLLOW) != 0 or current_file.st_dev != opened.stat.st_dev or current_file.st_ino != opened.stat.st_ino or current_file.st_uid != config.uid or current_file.st_gid != config.gid or (current_file.st_mode & 0o777) != config.mode) return error.StalePlan;
+    if (file_stat.fstatat(opened.parent, ".dotlocal-hosts.lock", &current_lock, c.AT_SYMLINK_NOFOLLOW) != 0 or current_lock.st_dev != lockstat.st_dev or current_lock.st_ino != lockstat.st_ino) return error.UnsafeHostsLock;
+    if (file_stat.fstatat(opened.parent, opened.base, &current_file, c.AT_SYMLINK_NOFOLLOW) != 0 or current_file.st_dev != opened.stat.st_dev or current_file.st_ino != opened.stat.st_ino or current_file.st_uid != config.uid or current_file.st_gid != config.gid or (current_file.st_mode & 0o777) != config.mode) return error.StalePlan;
 
     const before = try read(a, opened.file);
     defer a.free(before);
@@ -253,7 +254,7 @@ pub fn apply(a: A, io: std.Io, config: Config, p: Plan) !bool {
     process.writeAll(fd, p.desired) catch return error.HostsWriteFailed;
     if (c.fsync(fd) != 0) return error.HostsWriteFailed;
     var latest: c.struct_stat = undefined;
-    if (c.fstatat(opened.parent, opened.base, &latest, c.AT_SYMLINK_NOFOLLOW) != 0 or latest.st_dev != opened.stat.st_dev or latest.st_ino != opened.stat.st_ino) return error.StalePlan;
+    if (file_stat.fstatat(opened.parent, opened.base, &latest, c.AT_SYMLINK_NOFOLLOW) != 0 or latest.st_dev != opened.stat.st_dev or latest.st_ino != opened.stat.st_ino) return error.StalePlan;
     const content = try read(a, opened.file);
     defer a.free(content);
     if (!std.mem.eql(u8, &digest(content), &p.before_sha256)) return error.StalePlan;

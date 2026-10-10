@@ -1,4 +1,5 @@
 //! Durable exact-host local authorities. Trust changes remain an explicit caller operation.
+const file_stat = @import("file_stat.zig");
 const std = @import("std");
 const net = @import("net.zig");
 const osprocess = @import("process.zig");
@@ -660,7 +661,7 @@ fn syncDir(io: Io, dir: Io.Dir) !void {
 }
 pub fn secureFile(path: [:0]const u8, private: bool) !void {
     var st: c.struct_stat = undefined;
-    if (c.lstat(path, &st) != 0 or st.st_mode & c.S_IFMT != c.S_IFREG or st.st_mode & 0o022 != 0 or (private and st.st_mode & 0o077 != 0) or (st.st_uid != 0 and st.st_uid != c.geteuid())) return error.UnsafeCertificatePath;
+    if (file_stat.lstat(path, &st) != 0 or st.st_mode & c.S_IFMT != c.S_IFREG or st.st_mode & 0o022 != 0 or (private and st.st_mode & 0o077 != 0) or (st.st_uid != 0 and st.st_uid != c.geteuid())) return error.UnsafeCertificatePath;
 }
 /// Custom PEM loading keeps the existing API while using a narrow native
 /// descriptor boundary. OpenSSL receives only objects parsed from owned bytes.
@@ -709,7 +710,7 @@ fn rejectPassword(_: [*c]u8, _: c_int, _: c_int, _: ?*anyopaque) callconv(.c) c_
 }
 fn customFileStat(fd: c_int, private: bool) !c.struct_stat {
     var stat: c.struct_stat = undefined;
-    if (c.fstat(fd, &stat) != 0 or stat.st_mode & c.S_IFMT != c.S_IFREG or stat.st_mode & 0o022 != 0 or (private and stat.st_mode & 0o077 != 0) or (stat.st_uid != 0 and stat.st_uid != c.geteuid()) or stat.st_nlink != 1) return error.UnsafeCertificatePath;
+    if (file_stat.fstat(fd, &stat) != 0 or stat.st_mode & c.S_IFMT != c.S_IFREG or stat.st_mode & 0o022 != 0 or (private and stat.st_mode & 0o077 != 0) or (stat.st_uid != 0 and stat.st_uid != c.geteuid()) or stat.st_nlink != 1) return error.UnsafeCertificatePath;
     if (stat.st_size <= 0 or stat.st_size > max_bundle) return error.InvalidCertificate;
     return stat;
 }

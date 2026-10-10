@@ -1,3 +1,4 @@
+pub const file_stat = @import("file_stat.zig");
 const std = @import("std");
 const builtin = @import("builtin");
 const c = std.c;
@@ -76,7 +77,7 @@ fn inspectLinux(pid: c_int) !Identity {
     if (fd < 0) return if (c.errno(@as(c_int, -1)) == .NOENT) error.ProcessGone else error.ProcessInspectionFailed;
     defer _ = c.close(fd);
     var stat: native.struct_stat = undefined;
-    if (native.fstat(fd, &stat) != 0) return error.ProcessInspectionFailed;
+    if (file_stat.fstat(fd, &stat) != 0) return error.ProcessInspectionFailed;
     var buffer: [4096]u8 = undefined;
     const n = c.read(fd, &buffer, buffer.len);
     if (n <= 0 or n == buffer.len) return error.ProcessGone;
@@ -218,7 +219,7 @@ pub fn signalProcess(identity: Identity, sig: std.posix.SIG) !void {
 /// security boundary, after opening without following symlinks.
 pub fn validateOwned(fd: c_int, mode: u16, directory: bool) !void {
     var info: native.struct_stat = undefined;
-    if (native.fstat(fd, &info) != 0) return error.FileInspectionFailed;
+    if (file_stat.fstat(fd, &info) != 0) return error.FileInspectionFailed;
     const kind = info.st_mode & native.S_IFMT;
     if (kind != (if (directory) native.S_IFDIR else native.S_IFREG) or info.st_uid != uid() or info.st_mode & 0o7777 != mode or (!directory and info.st_nlink != 1)) return error.UnsafeStateFile;
 }
@@ -227,7 +228,7 @@ pub fn validateOwned(fd: c_int, mode: u16, directory: bool) !void {
 /// group and other cannot write. Readability is the owner's choice.
 pub fn validateUserFile(fd: c_int) !void {
     var info: native.struct_stat = undefined;
-    if (native.fstat(fd, &info) != 0) return error.FileInspectionFailed;
+    if (file_stat.fstat(fd, &info) != 0) return error.FileInspectionFailed;
     if (info.st_mode & native.S_IFMT != native.S_IFREG or info.st_uid != uid() or info.st_mode & 0o022 != 0 or info.st_nlink != 1) return error.UnsafeStateFile;
 }
 
@@ -235,7 +236,7 @@ pub fn validateUserFile(fd: c_int) !void {
 /// so nobody else can swap the staged binary before it is renamed.
 pub fn validateInstallDirectory(fd: c_int) !void {
     var info: native.struct_stat = undefined;
-    if (native.fstat(fd, &info) != 0) return error.FileInspectionFailed;
+    if (file_stat.fstat(fd, &info) != 0) return error.FileInspectionFailed;
     if (info.st_mode & native.S_IFMT != native.S_IFDIR or info.st_uid != uid() or info.st_mode & 0o022 != 0) return error.UnsafeStateFile;
 }
 

@@ -1,5 +1,6 @@
 //! Detached startup, terminal closure and identity-bound CLI stop with real
 //! processes, a real pseudo-terminal, sockets and the management daemon.
+const file_stat = @import("dotlocal").process.file_stat;
 const std = @import("std");
 const builtin = @import("builtin");
 const t = @import("test_support.zig");
@@ -250,7 +251,7 @@ fn gone(f: *t.Fixture, target: c_int) !void {
 }
 fn mode(f: *t.Fixture, path: []const u8) !c_uint {
     var stat: c.struct_stat = undefined;
-    if (c.lstat(try f.a.dupeSentinel(u8, path, 0), &stat) != 0) return error.StatFailed;
+    if (file_stat.lstat(try f.a.dupeSentinel(u8, path, 0), &stat) != 0) return error.StatFailed;
     return @intCast(stat.st_mode & 0o777);
 }
 fn write(f: *t.Fixture, name: []const u8, data: []const u8) !void {

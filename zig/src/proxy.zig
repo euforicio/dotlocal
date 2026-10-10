@@ -1,4 +1,5 @@
 //! Streaming HTTP/1 proxy and upgrade tunnel. No environment proxy or runtime dependency.
+const file_stat = @import("file_stat.zig");
 const std = @import("std");
 const net = @import("net.zig");
 const protocol = @import("protocol.zig");
@@ -319,7 +320,7 @@ fn clientContextKey(path_z: ?[:0]const u8) ?ClientContextCache.Key {
     const path = path_z orelse return key;
     if (path.len > key.path.len) return null;
     var st: c.struct_stat = undefined;
-    if (c.stat(path, &st) != 0) return null;
+    if (file_stat.stat(path, &st) != 0) return null;
     @memcpy(key.path[0..path.len], path);
     key.len = path.len;
     key.dev = st.st_dev;

@@ -1,3 +1,4 @@
+const file_stat = @import("file_stat.zig");
 const std = @import("std");
 pub const protocol = @import("protocol.zig");
 pub const routes = @import("routes.zig");
@@ -188,7 +189,7 @@ fn checkOwner(handle: std.posix.fd_t) !void {
     // std.Io.File.Stat currently omits UID; libc is restricted to this metadata boundary.
     const c = @import("native");
     var stat: c.struct_stat = undefined;
-    if (c.fstat(handle, &stat) != 0) return error.StatFailed;
+    if (file_stat.fstat(handle, &stat) != 0) return error.StatFailed;
     if (stat.st_uid != c.geteuid()) return error.UnsafeOwnership;
 }
 fn checkFile(file: std.Io.File, io: std.Io) !std.Io.File.Stat {

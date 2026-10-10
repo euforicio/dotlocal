@@ -27,8 +27,14 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - os: Linux ARM64
             runner: blacksmith-4vcpu-ubuntu-2404-arm
+          - os: macOS Intel (Rosetta)
+            runner: blacksmith-6vcpu-macos-latest
+            target: x86_64-macos.13.0
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    env:
+      ZIG_TARGET: ${{ matrix.target || 'native' }}
+      DOTLOCAL_DEPS_TARGET: ${{ matrix.target }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,12 +59,12 @@ jobs:
       - name: Check Zig formatting
         run: zig fmt --check build.zig zig
       - name: Build and test Debug
-        run: zig build test
+        run: zig build test "-Dtarget=$ZIG_TARGET" -frosetta
       - name: Build and test ReleaseSafe
-        run: zig build test -Doptimize=ReleaseSafe
+        run: zig build test -Doptimize=ReleaseSafe "-Dtarget=$ZIG_TARGET" -frosetta
       - name: Integration and library consumer
         run: |
-          zig build integration -Doptimize=ReleaseSafe
-          zig build example -Doptimize=ReleaseSafe
+          zig build integration -Doptimize=ReleaseSafe "-Dtarget=$ZIG_TARGET" -frosetta
+          zig build example -Doptimize=ReleaseSafe "-Dtarget=$ZIG_TARGET" -frosetta
       - name: Benchmark real paths
-        run: zig build bench -Doptimize=ReleaseSafe
+        run: zig build bench -Doptimize=ReleaseSafe "-Dtarget=$ZIG_TARGET" -frosetta

@@ -1,4 +1,5 @@
 //! The small native socket boundary shared by management, TLS and HTTP/2.
+const file_stat = @import("file_stat.zig");
 const std = @import("std");
 pub const c = @import("native");
 pub fn errno() c_int {
@@ -34,7 +35,7 @@ pub fn listenUnix(a: std.mem.Allocator, path: []const u8) !c_int {
     const z = try a.dupeSentinel(u8, path, 0);
     defer a.free(z);
     var st: c.struct_stat = undefined;
-    if (c.lstat(z, &st) == 0) return error.SocketAlreadyExists;
+    if (file_stat.lstat(z, &st) == 0) return error.SocketAlreadyExists;
     const fd = c.socket(c.AF_UNIX, c.SOCK_STREAM, 0);
     if (fd < 0) return error.SocketFailed;
     errdefer close(fd);
@@ -51,7 +52,7 @@ pub fn connectUnix(a: std.mem.Allocator, path: []const u8) !c_int {
     const z = try a.dupeSentinel(u8, path, 0);
     defer a.free(z);
     var st: c.struct_stat = undefined;
-    if (c.lstat(z, &st) != 0) return if (errno() == c.ENOENT) error.FileNotFound else error.UnsafeSocket;
+    if (file_stat.lstat(z, &st) != 0) return if (errno() == c.ENOENT) error.FileNotFound else error.UnsafeSocket;
     if (st.st_mode & c.S_IFMT != c.S_IFSOCK or st.st_mode & 0o002 != 0 or (st.st_uid != 0 and st.st_uid != c.geteuid())) return error.UnsafeSocket;
     const fd = c.socket(c.AF_UNIX, c.SOCK_STREAM, 0);
     if (fd < 0) return error.SocketFailed;

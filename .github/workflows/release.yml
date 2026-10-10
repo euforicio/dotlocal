@@ -158,26 +158,27 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          # Tests run natively; zig_target selects the shipped artifact's
+          # Intel macOS tests run through Rosetta; the other targets run natively.
+          # zig_target selects the shipped artifact's
           # target and its dependencies are built for it in .zig-deps-release.
           # macOS releases support macOS 13 and newer.
           - target: aarch64-macos
             runner: blacksmith-6vcpu-macos-latest
-            test: true
+            native: true
             zig_target: aarch64-macos.13.0
-          # Blacksmith has no Intel macOS runners; cross-compile on Apple silicon.
+          # Cross-compile and execute Intel macOS on Apple silicon with Rosetta.
           - target: x86_64-macos
             runner: blacksmith-6vcpu-macos-latest
-            test: false
+            native: false
             zig_target: x86_64-macos.13.0
           # Linux releases target glibc 2.28 (RHEL 8, Debian 10, Ubuntu 20.04 and newer).
           - target: aarch64-linux
             runner: blacksmith-4vcpu-ubuntu-2404-arm
-            test: true
+            native: true
             zig_target: aarch64-linux-gnu.2.28
           - target: x86_64-linux
             runner: blacksmith-4vcpu-ubuntu-2404
-            test: true
+            native: true
             zig_target: x86_64-linux-gnu.2.28
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -186,7 +187,7 @@ jobs:
     env:
       TARGET: ${{ matrix.target }}
       ZIG_TARGET: ${{ matrix.zig_target }}
-      RUNS_NATIVELY: ${{ matrix.test }}
+      RUNS_NATIVELY: ${{ matrix.native }}
       VERSION: ${{ needs.version.outputs.version }}
       TAG: ${{ needs.version.outputs.tag }}
     steps:
@@ -216,7 +217,7 @@ jobs:
           tar -xf "$archive" -C "$RUNNER_TEMP"
           printf '%s\n' "$RUNNER_TEMP/zig-${architecture}-${platform}-0.17.0" >> "$GITHUB_PATH"
       - name: Build native dependencies
-        if: matrix.test
+        if: matrix.native
         run: ./zig/scripts/bootstrap-deps
       - name: Build release dependencies
         if: matrix.zig_target != ''
@@ -225,13 +226,15 @@ jobs:
           DOTLOCAL_DEPS_PREFIX: ${{ github.workspace }}/.zig-deps-release
         run: ./zig/scripts/bootstrap-deps
       - name: Test
-        if: matrix.test
+        env:
+          TEST_TARGET: ${{ matrix.target == 'x86_64-macos' && matrix.zig_target || 'native' }}
+          TEST_DEPS: ${{ matrix.target == 'x86_64-macos' && '.zig-deps-release' || '.zig-deps' }}
         run: |
           zig fmt --check build.zig zig
-          zig build test
-          zig build test -Doptimize=ReleaseSafe
-          zig build integration -Doptimize=ReleaseSafe
-          zig build example -Doptimize=ReleaseSafe
+          zig build test "-Dtarget=$TEST_TARGET" "-Ddeps=$TEST_DEPS" -frosetta
+          zig build test -Doptimize=ReleaseSafe "-Dtarget=$TEST_TARGET" "-Ddeps=$TEST_DEPS" -frosetta
+          zig build integration -Doptimize=ReleaseSafe "-Dtarget=$TEST_TARGET" "-Ddeps=$TEST_DEPS" -frosetta
+          zig build example -Doptimize=ReleaseSafe "-Dtarget=$TEST_TARGET" "-Ddeps=$TEST_DEPS" -frosetta
       - name: Build and package
         shell: bash
         run: |

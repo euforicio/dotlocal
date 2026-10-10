@@ -1,6 +1,7 @@
 //! Self-update end to end: real update-test CLI builds replace themselves from
 //! signed releases served over local HTTPS with a test CA, and the installer
 //! script installs from the same server.
+const file_stat = @import("dotlocal").process.file_stat;
 const std = @import("std");
 const t = @import("test_support.zig");
 const lib = t.lib;
@@ -296,7 +297,7 @@ fn digest(f: *t.Fixture, file: []const u8) ![64]u8 {
 
 fn mode(f: *t.Fixture, file: []const u8) !c_uint {
     var stat: t.c.struct_stat = undefined;
-    if (t.c.lstat(try f.a.dupeSentinel(u8, file, 0), &stat) != 0) return error.StatFailed;
+    if (file_stat.lstat(try f.a.dupeSentinel(u8, file, 0), &stat) != 0) return error.StatFailed;
     return @intCast(stat.st_mode & 0o777);
 }
 

@@ -1,4 +1,5 @@
 //! Real certificates/files and read-only native macOS lifecycle inspection.
+const file_stat = @import("../src/file_stat.zig");
 const std = @import("std");
 const service = @import("../src/service.zig");
 const pki = @import("../src/pki.zig");
@@ -245,7 +246,7 @@ const PrivilegedFixture = struct {
             const z = try a.dupeSentinel(u8, path, 0);
             defer a.free(z);
             var st: c.struct_stat = undefined;
-            if (c.lstat(z, &st) == 0 or @import("../src/net.zig").errno() != c.ENOENT) return error.PreexistingServiceArtifact;
+            if (file_stat.lstat(z, &st) == 0 or @import("../src/net.zig").errno() != c.ENOENT) return error.PreexistingServiceArtifact;
         }
     }
     /// Called only after absent() proves the isolated namespace was created by this gate.
@@ -263,14 +264,14 @@ const PrivilegedFixture = struct {
         const caz = try a.dupeSentinel(u8, ca, 0);
         defer a.free(caz);
         var st: c.struct_stat = undefined;
-        if (c.lstat(caz, &st) == 0) {
+        if (file_stat.lstat(caz, &st) == 0) {
             try service.untrust(a, io, ca);
             if (try service.systemTrusted(a, io, ca)) return error.ServiceCleanupFailed;
         } else if (@import("../src/net.zig").errno() != c.ENOENT) return error.ServiceCleanupFailed;
         for ([_][]const u8{ self.config.executable, self.config.plist_path }) |path| {
             const z = try a.dupeSentinel(u8, path, 0);
             defer a.free(z);
-            if (c.lstat(z, &st) == 0) {
+            if (file_stat.lstat(z, &st) == 0) {
                 if ((st.st_mode & c.S_IFMT) != c.S_IFREG or st.st_uid != 0 or st.st_gid != 0) return error.UnsafeCleanupArtifact;
                 if (c.unlink(z) != 0) return error.ServiceCleanupFailed;
             } else if (@import("../src/net.zig").errno() != c.ENOENT) return error.ServiceCleanupFailed;
@@ -278,7 +279,7 @@ const PrivilegedFixture = struct {
         for ([_][]const u8{ self.config.state_dir, self.config.runtime_dir, std.fs.path.dirname(self.config.stdout_path).?, std.fs.path.dirname(self.config.ca_export).? }) |path| {
             const z = try a.dupeSentinel(u8, path, 0);
             defer a.free(z);
-            if (c.lstat(z, &st) == 0) {
+            if (file_stat.lstat(z, &st) == 0) {
                 if ((st.st_mode & c.S_IFMT) != c.S_IFDIR or st.st_uid != 0 or (st.st_mode & 0o022) != 0) return error.UnsafeCleanupArtifact;
                 try std.Io.Dir.cwd().deleteTree(io, path);
             } else if (@import("../src/net.zig").errno() != c.ENOENT) return error.ServiceCleanupFailed;
@@ -290,7 +291,7 @@ fn fileStat(path: []const u8) !c.struct_stat {
     const z = try a.dupeSentinel(u8, path, 0);
     defer a.free(z);
     var st: c.struct_stat = undefined;
-    if (c.lstat(z, &st) != 0) return error.FileNotFound;
+    if (file_stat.lstat(z, &st) != 0) return error.FileNotFound;
     return st;
 }
 fn writeTLSFile(path: []const u8, cert: ?*c.X509, key: ?*c.EVP_PKEY) !void {

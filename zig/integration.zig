@@ -1,3 +1,4 @@
+const file_stat = @import("dotlocal").process.file_stat;
 const std = @import("std");
 const t = @import("test_support.zig");
 const H2 = @import("h2_test.zig").Client;
@@ -136,7 +137,7 @@ fn cli(init: std.process.Init, binary: []const u8, server: []const u8) !void {
         try t.check((try t.field(try t.json(automatic.a, result.stdout), "url")) == .null, "bypass injected proxy metadata");
         _ = try automatic.command(&.{ "run", "--name", "bypass", server, "exit", "23" }, 23);
         var stat: c.struct_stat = undefined;
-        try t.check(c.lstat(try automatic.a.dupeSentinel(u8, automatic.state, 0), &stat) != 0 and t.net.errno() == c.ENOENT, "bypass created proxy state");
+        try t.check(file_stat.lstat(try automatic.a.dupeSentinel(u8, automatic.state, 0), &stat) != 0 and t.net.errno() == c.ENOENT, "bypass created proxy state");
     }
     _ = automatic.env.swapRemove("DOTLOCAL");
     if (t.lib.process.uid() != 0) {

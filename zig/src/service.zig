@@ -1,3 +1,4 @@
+const file_stat = @import("file_stat.zig");
 const std = @import("std");
 const builtin = @import("builtin");
 const c = @import("native");
@@ -179,7 +180,7 @@ fn safeDir(a: A, path: []const u8, mode: u32, gid: u32) !void {
     const ancestor = std.fs.path.dirname(path) orelse path;
     if (!std.mem.eql(u8, ancestor, path)) try safeDir(a, ancestor, 0o755, 0);
     var stat: c.struct_stat = undefined;
-    if (c.lstat(z, &stat) != 0) {
+    if (file_stat.lstat(z, &stat) != 0) {
         const parent = std.fs.path.dirname(path) orelse return error.UnsafeArtifact;
         const parentz = try a.dupeSentinel(u8, parent, 0);
         defer a.free(parentz);
@@ -192,8 +193,8 @@ fn safeDir(a: A, path: []const u8, mode: u32, gid: u32) !void {
         const fd = c.openat(dir, base, c.O_RDONLY | c.O_DIRECTORY | c.O_NOFOLLOW | c.O_CLOEXEC);
         if (fd < 0) return error.UnsafeArtifact;
         defer _ = c.close(fd);
-        if (c.fstat(fd, &stat) != 0 or stat.st_uid != 0 or (stat.st_mode & c.S_IFMT) != c.S_IFDIR) return error.UnsafeArtifact;
-        if (c.fchown(fd, 0, gid) != 0 or c.fchmod(fd, @intCast(mode)) != 0 or c.fstat(fd, &stat) != 0) return error.ServiceWriteFailed;
+        if (file_stat.fstat(fd, &stat) != 0 or stat.st_uid != 0 or (stat.st_mode & c.S_IFMT) != c.S_IFDIR) return error.UnsafeArtifact;
+        if (c.fchown(fd, 0, gid) != 0 or c.fchmod(fd, @intCast(mode)) != 0 or file_stat.fstat(fd, &stat) != 0) return error.ServiceWriteFailed;
     }
     // /var is an OS-owned symlink on macOS; canonicalize only this fixed parent.
     if (try systemAlias(path, z, stat)) return;
@@ -227,7 +228,7 @@ fn ownedDir(path: []const u8, mode: u32, gid: u32, owner: c.uid_t) !void {
     if (fd < 0) return error.UnsafeArtifact;
     defer _ = c.close(fd);
     var stat: c.struct_stat = undefined;
-    if (c.fstat(fd, &stat) != 0 or (stat.st_mode & c.S_IFMT) != c.S_IFDIR) return error.UnsafeArtifact;
+    if (file_stat.fstat(fd, &stat) != 0 or (stat.st_mode & c.S_IFMT) != c.S_IFDIR) return error.UnsafeArtifact;
     if (stat.st_uid == owner and stat.st_gid == gid and (stat.st_mode & 0o7777) == mode) return;
     if (stat.st_uid != owner or (stat.st_mode & 0o022) != 0) return error.UnmanagedServiceDirectory;
     if (c.fchown(fd, owner, gid) != 0 or c.fchmod(fd, @intCast(mode)) != 0) return error.ServiceWriteFailed;
@@ -247,8 +248,8 @@ fn writeArtifact(a: A, io: Io, path: []const u8, data: []const u8, mode: u32) !b
     if (dir < 0) return error.ServiceWriteFailed;
     defer _ = c.close(dir);
     var stat: c.struct_stat = undefined;
-    if (c.fstatat(dir, base, &stat, c.AT_SYMLINK_NOFOLLOW) == 0 and ((stat.st_mode & c.S_IFMT) != c.S_IFREG or stat.st_uid != 0 or stat.st_gid != 0 or (stat.st_mode & 0o022) != 0)) return error.UnsafeArtifact;
-    if (c.fstatat(dir, base, &stat, c.AT_SYMLINK_NOFOLLOW) == 0 and (stat.st_mode & 0o777) == mode) {
+    if (file_stat.fstatat(dir, base, &stat, c.AT_SYMLINK_NOFOLLOW) == 0 and ((stat.st_mode & c.S_IFMT) != c.S_IFREG or stat.st_uid != 0 or stat.st_gid != 0 or (stat.st_mode & 0o022) != 0)) return error.UnsafeArtifact;
+    if (file_stat.fstatat(dir, base, &stat, c.AT_SYMLINK_NOFOLLOW) == 0 and (stat.st_mode & 0o777) == mode) {
         const existing = try readFile(a, path, 128 << 20);
         defer a.free(existing);
         if (std.mem.eql(u8, existing, data)) return false;
@@ -272,7 +273,7 @@ fn verifyArtifact(a: A, path: []const u8) !void {
     if (fd < 0) return error.UnsafeArtifact;
     defer _ = c.close(fd);
     var stat: c.struct_stat = undefined;
-    if (c.fstat(fd, &stat) != 0 or (stat.st_mode & c.S_IFMT) != c.S_IFREG or stat.st_uid != 0 or stat.st_gid != 0 or (stat.st_mode & 0o022) != 0) return error.UnsafeArtifact;
+    if (file_stat.fstat(fd, &stat) != 0 or (stat.st_mode & c.S_IFMT) != c.S_IFREG or stat.st_uid != 0 or stat.st_gid != 0 or (stat.st_mode & 0o022) != 0) return error.UnsafeArtifact;
 }
 pub fn install(a: A, io: Io, config: Config, source: []const u8) !void {
     try validate(a, config);
@@ -359,7 +360,7 @@ pub fn uninstall(a: A, io: Io, config: Config) !void {
     const socket = try a.dupeSentinel(u8, config.management_socket, 0);
     defer a.free(socket);
     var socket_stat: c.struct_stat = undefined;
-    if (c.lstat(socket, &socket_stat) == 0) {
+    if (file_stat.lstat(socket, &socket_stat) == 0) {
         const gid = try groupID(a, config.management_group);
         try safeDir(a, config.runtime_dir, 0o750, gid);
         if ((socket_stat.st_mode & c.S_IFMT) != c.S_IFSOCK or socket_stat.st_uid != 0 or socket_stat.st_gid != gid) return error.UnsafeArtifact;
@@ -371,7 +372,7 @@ fn exists(a: A, path: []const u8) !bool {
     const z = try a.dupeSentinel(u8, path, 0);
     defer a.free(z);
     var st: c.struct_stat = undefined;
-    if (c.lstat(z, &st) == 0) return true;
+    if (file_stat.lstat(z, &st) == 0) return true;
     return if (@import("net.zig").errno() == c.ENOENT) false else error.UnsafeArtifact;
 }
 const system_keychain = "/Library/Keychains/System.keychain";
@@ -500,7 +501,7 @@ pub fn executableVersion(a: A, io: Io, path: []const u8, owner: c.uid_t) !?[]u8 
     if (fd < 0) return if (@import("net.zig").errno() == c.ENOENT) null else error.UnsafeArtifact;
     defer _ = c.close(fd);
     var st: c.struct_stat = undefined;
-    if (c.fstat(fd, &st) != 0 or (st.st_mode & c.S_IFMT) != c.S_IFREG or st.st_uid != owner or (st.st_mode & 0o022) != 0) return error.UnsafeArtifact;
+    if (file_stat.fstat(fd, &st) != 0 or (st.st_mode & c.S_IFMT) != c.S_IFREG or st.st_uid != owner or (st.st_mode & 0o022) != 0) return error.UnsafeArtifact;
     return try @import("update.zig").probeVersion(a, io, path);
 }
 fn checkParents(a: A, path: []const u8) !void {
@@ -509,7 +510,7 @@ fn checkParents(a: A, path: []const u8) !void {
         const z = try a.dupeSentinel(u8, parent, 0);
         defer a.free(z);
         var st: c.struct_stat = undefined;
-        if (c.lstat(z, &st) != 0) return if (@import("net.zig").errno() == c.ENOENT) error.FileNotFound else error.UnsafeArtifact;
+        if (file_stat.lstat(z, &st) != 0) return if (@import("net.zig").errno() == c.ENOENT) error.FileNotFound else error.UnsafeArtifact;
         const alias = try systemAlias(parent, z, st);
         if (!alias and (st.st_mode & c.S_IFMT) != c.S_IFDIR) return error.UnsafeArtifact;
         if (std.mem.eql(u8, parent, "/")) break;
@@ -527,7 +528,7 @@ fn readFile(a: A, path: []const u8, limit: usize) ![]u8 {
     if (fd < 0) return if (@import("net.zig").errno() == c.ENOENT) error.FileNotFound else error.UnsafeArtifact;
     defer _ = c.close(fd);
     var st: c.struct_stat = undefined;
-    if (c.fstat(fd, &st) != 0 or (st.st_mode & c.S_IFMT) != c.S_IFREG or (st.st_mode & 0o022) != 0 or st.st_size < 0 or st.st_size > limit) return error.UnsafeArtifact;
+    if (file_stat.fstat(fd, &st) != 0 or (st.st_mode & c.S_IFMT) != c.S_IFREG or (st.st_mode & 0o022) != 0 or st.st_size < 0 or st.st_size > limit) return error.UnsafeArtifact;
     var bytes: std.ArrayList(u8) = .empty;
     errdefer bytes.deinit(a);
     var buffer: [8192]u8 = undefined;
@@ -632,7 +633,7 @@ test "service directories never take ownership of preexisting system paths" {
     // refused before any chown or chmod is attempted, even as root.
     try std.testing.expectError(error.UnmanagedServiceDirectory, managedDir(a, "/usr", 0o750, 0));
     var stat: c.struct_stat = undefined;
-    try std.testing.expectEqual(@as(c_int, 0), c.stat("/usr", &stat));
+    try std.testing.expectEqual(@as(c_int, 0), file_stat.stat("/usr", &stat));
     try std.testing.expectEqual(@as(u32, 0o755), @as(u32, @intCast(stat.st_mode & 0o7777)));
     if (builtin.os.tag == .macos) try std.testing.expectError(error.UnmanagedServiceDirectory, managedDir(a, "/var/run", 0o750, 0));
     for ([_][]const u8{ "/usr", "/var/run", "/usr/local/share", "/Library", "/tmp", "/" }) |path|
@@ -655,14 +656,14 @@ test "service directories left by uninstall are repaired in place" {
     // An older build's mode is tightened on reinstall.
     try ownedDir(state, 0o700, gid, uid);
     var stat: c.struct_stat = undefined;
-    try std.testing.expectEqual(@as(c_int, 0), c.stat(statez, &stat));
+    try std.testing.expectEqual(@as(c_int, 0), file_stat.stat(statez, &stat));
     try std.testing.expectEqual(@as(u32, 0o700), @as(u32, @intCast(stat.st_mode & 0o7777)));
     try std.testing.expectEqual(gid, @as(u32, @intCast(stat.st_gid)));
     try ownedDir(state, 0o700, gid, uid);
     // Group/other-writable directories are not trusted for repair.
     _ = c.chmod(statez, 0o775);
     try std.testing.expectError(error.UnmanagedServiceDirectory, ownedDir(state, 0o700, gid, uid));
-    try std.testing.expectEqual(@as(c_int, 0), c.stat(statez, &stat));
+    try std.testing.expectEqual(@as(c_int, 0), file_stat.stat(statez, &stat));
     try std.testing.expectEqual(@as(u32, 0o775), @as(u32, @intCast(stat.st_mode & 0o7777)));
     // A directory owned by someone else is refused.
     if (uid != 0) try std.testing.expectError(error.UnmanagedServiceDirectory, ownedDir(state, 0o700, gid, 0));
@@ -673,6 +674,6 @@ test "service directories left by uninstall are repaired in place" {
     try std.testing.expectEqual(@as(c_int, 0), c.symlink(statez, link));
     defer _ = c.unlink(link);
     try std.testing.expectError(error.UnsafeArtifact, ownedDir(link, 0o700, gid, uid));
-    try std.testing.expectEqual(@as(c_int, 0), c.stat(statez, &stat));
+    try std.testing.expectEqual(@as(c_int, 0), file_stat.stat(statez, &stat));
     try std.testing.expectEqual(@as(u32, 0o755), @as(u32, @intCast(stat.st_mode & 0o7777)));
 }

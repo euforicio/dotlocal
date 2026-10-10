@@ -1,6 +1,6 @@
 .{
     .name = .dotlocal,
-    .version = "0.1.0",
+    .version = "0.1.1",
     .fingerprint = 0x913a7d0691f87993,
     .minimum_zig_version = "0.17.0",
     .paths = .{ "build.zig", "build.zig.zon", "zig", "README.md" },

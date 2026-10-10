@@ -1,4 +1,5 @@
 //! Optional ngrok CLI adapter. Public exposure occurs only through explicit start().
+const file_stat = @import("file_stat.zig");
 const std = @import("std");
 const process = @import("process.zig");
 const runner = @import("runner.zig");
@@ -64,7 +65,7 @@ pub fn checkWithEnvironment(a: A, io: Io, executable: []const u8, environment: ?
         const file = try Io.Dir.openFileAbsolute(io, path, .{ .follow_symlinks = false, .allow_directory = false });
         defer file.close(io);
         var st: c.struct_stat = undefined;
-        if (c.fstat(file.handle, &st) != 0 or st.st_uid != process.uid() or (st.st_mode & 0o022) != 0 or (st.st_mode & c.S_IFMT) != c.S_IFREG) return error.UnsafeNgrokConfiguration;
+        if (file_stat.fstat(file.handle, &st) != 0 or st.st_uid != process.uid() or (st.st_mode & 0o022) != 0 or (st.st_mode & c.S_IFMT) != c.S_IFREG) return error.UnsafeNgrokConfiguration;
         var file_buffer: [4096]u8 = undefined;
         var file_reader = file.reader(io, &file_buffer);
         const bytes = try file_reader.interface.allocRemaining(a, .limited(1 << 20));

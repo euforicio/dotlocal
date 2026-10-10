@@ -1,4 +1,5 @@
 //! Direct argv execution and a private, durable registry of exact process identities.
+const file_stat = @import("file_stat.zig");
 const std = @import("std");
 const osprocess = @import("process.zig");
 pub const projectconfig = @import("projectconfig.zig");
@@ -698,7 +699,7 @@ pub fn removeOwnedSocket(allocator: Allocator, io: Io, path: []const u8) !void {
         const name = try allocator.dupeSentinel(u8, part, 0);
         defer allocator.free(name);
         var stat: c.struct_stat = undefined;
-        if (c.fstatat(dir.handle, name, &stat, c.AT_SYMLINK_NOFOLLOW) != 0) {
+        if (file_stat.fstatat(dir.handle, name, &stat, c.AT_SYMLINK_NOFOLLOW) != 0) {
             if (std.c._errno().* == c.ENOENT) return;
             return error.SocketInspectionFailed;
         }
