@@ -241,11 +241,11 @@ fn find(state: State, name: []const u8) ?Record {
     for (state.records) |record| if (std.mem.eql(u8, record.endpoint.name, name)) return record;
     return null;
 }
-// Records always name this user's processes. A reused PID that another user
-// owns is denied inspection, and is therefore not the recorded process.
+// Valid records require a positive start time and their own process group.
+// A reused PID with no usable identity cannot be the recorded process.
 fn alive(record: Record) !bool {
     const live = osprocess.inspect(record.identity.pid) catch |err| switch (err) {
-        error.ProcessGone => return false,
+        error.ProcessGone, error.InvalidProcessIdentity => return false,
         else => return err,
     };
     return live.uid == record.uid and live.start == record.identity.start and live.pgid == record.process_group;
@@ -253,7 +253,7 @@ fn alive(record: Record) !bool {
 pub fn classify(record: Record) !Status {
     if (!(try alive(record))) return .stale;
     const supervisor = osprocess.inspect(record.supervisor.pid) catch |err| switch (err) {
-        error.ProcessGone => return .orphaned,
+        error.ProcessGone, error.InvalidProcessIdentity => return .orphaned,
         else => return err,
     };
     return if (supervisor.uid == record.supervisor_uid and supervisor.start == record.supervisor.start) .active else .orphaned;

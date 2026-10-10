@@ -154,15 +154,15 @@ test "private state rejects unsafe permissions and symlinks" {
     } else |_| {}
 }
 
-test "stale record whose pid now belongs to another user is pruned, not fatal" {
+test "stale record pointing at the system init process is pruned, not fatal" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const path = try statePath(tmp);
     defer allocator.free(path);
     var manager = try runner.Manager.open(allocator, io, path);
     defer manager.deinit();
-    // PID 1 is launchd (root): inspection is denied, as for any reused PID
-    // another user owns. Such a PID is never this user's recorded process.
+    // PID 1 belongs to system init, not the recorded child. In a Linux PID
+    // namespace its process group may also be invisible to this namespace.
     const uid = std.c.geteuid();
     const data = try std.fmt.allocPrint(allocator, "{{\"version\":1,\"records\":[{{\"endpoint\":{{\"name\":\"stale.localhost\",\"proxy\":false}},\"identity\":{{\"pid\":1,\"start\":1}},\"process_group\":1,\"uid\":{d},\"supervisor\":{{\"pid\":1,\"start\":1}},\"supervisor_uid\":{d},\"working_directory\":\"/\"}}]}}", .{ uid, uid });
     defer allocator.free(data);
@@ -177,6 +177,20 @@ test "stale record whose pid now belongs to another user is pruned, not fatal" {
     var child = try runner.start(allocator, io, .{ .name = "stale", .argv = &.{"/usr/bin/true"}, .state_directory = path, .proxy = false });
     defer child.deinit();
     try std.testing.expectEqual(@as(u8, 0), (try child.wait()).exitCode());
+}
+
+test "live child whose recorded supervisor points at system init is orphaned" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try statePath(tmp);
+    defer allocator.free(path);
+    var child = try runner.start(allocator, io, .{ .name = "orphaned", .argv = &.{ "/bin/sleep", "60" }, .state_directory = path, .proxy = false });
+    defer child.deinit();
+    try std.testing.expectEqual(runner.Status.active, try runner.classify(child.record));
+    var orphaned = child.record;
+    orphaned.supervisor = .{ .pid = 1, .start = 1 };
+    try std.testing.expectEqual(runner.Status.orphaned, try runner.classify(orphaned));
+    try std.testing.expectEqual(runner.Status.active, try runner.classify(child.record));
 }
 
 test "bypass execution propagates exit codes and signal terminations" {
