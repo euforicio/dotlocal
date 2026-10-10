@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "dotlocal",
+  "version": "0.1.2",
+  "description": "Run and verify local servers at stable .local HTTPS URLs through the native dotlocal CLI and shared local service."
+}

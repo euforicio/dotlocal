@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zig:
+    name: Zig 0.17.0 (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macOS
+            runner: blacksmith-6vcpu-macos-latest
+          - os: Linux
+            runner: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install checksum-pinned Zig
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -s)-$(uname -m)" in
+            Darwin-arm64) architecture=aarch64; platform=macos; checksum=b607e9b9234790a008116ae5bdb71c6243b84b9fb42a53a9e70fde41c06c536a ;;
+            Darwin-x86_64) architecture=x86_64; platform=macos; checksum=4f9a1c5269aa17ebda5e6d3c2b89d6cbf36f7d2b22a0306e9ab98f25f95529c6 ;;
+            Linux-aarch64) architecture=aarch64; platform=linux; checksum=9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8 ;;
+            Linux-x86_64) architecture=x86_64; platform=linux; checksum=1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026 ;;
+            *) exit 1 ;;
+          esac
+          archive="$RUNNER_TEMP/zig.tar.xz"
+          curl --fail --location --silent --show-error "https://ziglang.org/download/0.17.0/zig-${architecture}-${platform}-0.17.0.tar.xz" -o "$archive"
+          printf '%s  %s\n' "$checksum" "$archive" | shasum -a 256 -c -
+          tar -xf "$archive" -C "$RUNNER_TEMP"
+          printf '%s\n' "$RUNNER_TEMP/zig-${architecture}-${platform}-0.17.0" >> "$GITHUB_PATH"
+      - name: Build native dependencies
+        run: ./zig/scripts/bootstrap-deps
+      - name: Check Zig formatting
+        run: zig fmt --check build.zig zig
+      - name: Build and test Debug
+        run: zig build test
+      - name: Build and test ReleaseSafe
+        run: zig build test -Doptimize=ReleaseSafe
+      - name: Integration and library consumer
+        run: |
+          zig build integration -Doptimize=ReleaseSafe
+          zig build example -Doptimize=ReleaseSafe
+      - name: Benchmark real paths
+        run: zig build bench -Doptimize=ReleaseSafe

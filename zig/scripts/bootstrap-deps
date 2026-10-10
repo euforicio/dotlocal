@@ -1,0 +1,47 @@
+#!/bin/sh
+# Build the pinned native TLS/HTTP2 libraries without changing system packages.
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+prefix=${DOTLOCAL_DEPS_PREFIX:-"$root/.zig-deps"}
+stamp="$prefix/.dotlocal-deps-4.0.3-1.70.0${DOTLOCAL_DEPS_TARGET:+-$DOTLOCAL_DEPS_TARGET}"
+if [ -f "$stamp" ]; then exit 0; fi
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+fetch() {
+    curl --fail --location --silent --show-error "$1" -o "$work/$2"
+    actual=$(shasum -a 256 "$work/$2" | awk '{print $1}')
+    [ "$actual" = "$3" ] || { echo "Checksum mismatch: $2" >&2; exit 1; }
+}
+fetch https://github.com/openssl/openssl/releases/download/openssl-4.0.3/openssl-4.0.3.tar.gz openssl.tar.gz 325b5c806167c13b40b1ffeadfe0248197c00eccc4cf123ec1e28d2d2fd216d9
+fetch https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/nghttp2-1.70.0.tar.xz nghttp2.tar.xz e05cb1388eaca3830aded4ccf20044b6e1ac1a61411dcca11b0437c4285c8bc2
+jobs=${DOTLOCAL_BUILD_JOBS:-4}
+# DOTLOCAL_DEPS_TARGET builds release libraries for a minimum OS:
+# <arch>-macos.<version> on macOS, or <arch>-linux-gnu.<glibc> with zig cc.
+openssl_target=
+host=
+case "${DOTLOCAL_DEPS_TARGET:-}" in
+    "") ;;
+    aarch64-macos.* | x86_64-macos.*)
+        [ "$(uname -s)" = Darwin ] || { echo "macOS dependencies require macOS" >&2; exit 1; }
+        arch=${DOTLOCAL_DEPS_TARGET%%-*}
+        MACOSX_DEPLOYMENT_TARGET=${DOTLOCAL_DEPS_TARGET#*-macos.}
+        if [ "$arch" = aarch64 ]; then openssl_target=darwin64-arm64-cc; cc_arch=arm64; else openssl_target=darwin64-x86_64-cc; cc_arch=x86_64; fi
+        host=--host=$arch-apple-darwin
+        CFLAGS="-arch $cc_arch -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"
+        export CFLAGS MACOSX_DEPLOYMENT_TARGET ;;
+    aarch64-linux-gnu.* | x86_64-linux-gnu.*)
+        arch=${DOTLOCAL_DEPS_TARGET%%-*}
+        openssl_target=linux-$arch
+        host=--host=$arch-linux-gnu
+        CC="zig cc -target $DOTLOCAL_DEPS_TARGET"
+        AR="zig ar"
+        RANLIB="zig ranlib"
+        export CC AR RANLIB ;;
+    *) echo "Unsupported DOTLOCAL_DEPS_TARGET: $DOTLOCAL_DEPS_TARGET" >&2; exit 1 ;;
+esac
+tar -xf "$work/openssl.tar.gz" -C "$work"
+(cd "$work/openssl-4.0.3" && ./Configure ${openssl_target:+"$openssl_target"} --prefix="$prefix" --libdir=lib no-tests no-shared && make -j"$jobs" && make install_sw) > "$work/openssl.log" 2>&1 || { tail -60 "$work/openssl.log" >&2; exit 1; }
+tar -xf "$work/nghttp2.tar.xz" -C "$work"
+(cd "$work/nghttp2-1.70.0" && ./configure ${host:+"$host"} --prefix="$prefix" --enable-lib-only --disable-shared --enable-static && make -j"$jobs" && make install) > "$work/nghttp2.log" 2>&1 || { tail -60 "$work/nghttp2.log" >&2; exit 1; }
+touch "$stamp"
+echo "Built OpenSSL 4.0.3 and nghttp2 1.70.0 in $prefix"

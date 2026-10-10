@@ -1,0 +1,4 @@
+interface:
+  display_name: "dotlocal"
+  short_description: "Run local apps on stable .local HTTPS URLs"
+  default_prompt: "Use $dotlocal to run this app at its .local HTTPS URL and verify it responds."

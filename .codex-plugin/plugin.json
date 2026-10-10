@@ -1,0 +1,20 @@
+{
+  "name": "dotlocal",
+  "version": "0.1.2",
+  "description": "Run and verify local servers at stable .local HTTPS URLs through the native dotlocal CLI and shared local service.",
+  "author": {"name": "euforicio", "url": "https://github.com/euforicio"},
+  "homepage": "https://github.com/euforicio/dotlocal",
+  "repository": "https://github.com/euforicio/dotlocal",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "dotlocal",
+    "shortDescription": "Stable .local HTTPS URLs for local app previews",
+    "longDescription": "Start any local HTTP server, attach existing loopback endpoints, verify the actual HTTPS URL, and clean up owned routes and app processes. Agents use the same shared .local service on ports 80/443 as developers.",
+    "developerName": "euforicio",
+    "category": "Developer Tools",
+    "capabilities": ["Local", "CLI"],
+    "websiteURL": "https://github.com/euforicio/dotlocal",
+    "defaultPrompt": ["Run this app at its .local HTTPS URL and verify that it responds."],
+    "brandColor": "#C7F5AA"
+  }
+}

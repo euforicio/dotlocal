@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-labelledby="title description">
+  <title id="title">dotlocal</title>
+  <desc id="description">Stable .local URLs for local servers. A Zig library and CLI.</desc>
+  <rect width="1280" height="360" rx="24" fill="#101714"/>
+  <g fill="none" stroke="#24372c">
+    <path d="M760 0v360M888 0v360M1016 0v360M1144 0v360M760 72h520M760 180h520M760 288h520"/>
+  </g>
+  <rect x="64" y="70" width="76" height="76" rx="18" fill="#c7f5aa"/>
+  <text x="102" y="121" text-anchor="middle" fill="#143b25" font-family="system-ui, -apple-system, sans-serif" font-size="36" font-weight="700">d/</text>
+  <text x="162" y="133" fill="#e3eee7" font-family="system-ui, -apple-system, sans-serif" font-size="72" font-weight="700" letter-spacing="-3">dotlocal</text>
+  <text x="64" y="212" fill="#a9bdb0" font-family="system-ui, -apple-system, sans-serif" font-size="28">Local servers. Stable URLs.</text>
+  <text x="64" y="286" fill="#99b4a2" font-family="system-ui, -apple-system, sans-serif" font-size="18">Zig library + CLI</text>
+  <rect x="770" y="110" width="440" height="140" rx="18" fill="#16211a" stroke="#344d3c"/>
+  <circle cx="802" cy="139" r="5" fill="#c7f5aa"/>
+  <text x="820" y="145" fill="#99b4a2" font-family="system-ui, -apple-system, sans-serif" font-size="16">Your local app</text>
+  <path d="M770 166h440" stroke="#344d3c"/>
+  <text x="802" y="218" fill="#c7f5aa" font-family="ui-monospace, SFMono-Regular, monospace" font-size="28">https://demo.local</text>
+</svg>

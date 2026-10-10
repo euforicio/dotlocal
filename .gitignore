@@ -1,0 +1,11 @@
+/bin/
+/dist/
+/.dotlocal/
+/dotlocal
+*.test
+*.out
+*.prof
+.DS_Store
+/.zig-cache/
+/zig-out/
+/.zig-deps

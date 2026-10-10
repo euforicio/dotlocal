@@ -1,0 +1,431 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Only nightly; stable releases come from v* tags
+        required: true
+        default: nightly
+        type: choice
+        options: [nightly]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  RELEASES_REPO: ${{ github.repository }}
+
+jobs:
+  version:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      channel: ${{ steps.v.outputs.channel }}
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      skip: ${{ steps.v.outputs.skip }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Compute channel and version
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNING_KEY_SET: ${{ secrets.DOTLOCAL_SIGNING_KEY != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$SIGNING_KEY_SET" != true ]; then
+            if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+              echo "::notice::DOTLOCAL_SIGNING_KEY is not configured; skipping the scheduled nightly release"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::DOTLOCAL_SIGNING_KEY is not configured; releases cannot be signed"
+            exit 1
+          fi
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          sha=$(git rev-parse HEAD)
+          short=$(git rev-parse --short=7 HEAD)
+          skip=false
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            channel=stable
+            version=${GITHUB_REF_NAME#v}
+            [[ "$version" =~ $semver ]] || { echo "Tag $GITHUB_REF_NAME is not v<major>.<minor>.<patch>" >&2; exit 1; }
+            git merge-base --is-ancestor "$sha" origin/main || { echo "Tag $GITHUB_REF_NAME is not on main" >&2; exit 1; }
+            tag=$GITHUB_REF_NAME
+            # A re-run of the same tag may republish; any other tag must be newer.
+            newest=$(gh release list -R "$RELEASES_REPO" --exclude-drafts --exclude-pre-releases --limit 100 --json tagName --jq '.[].tagName' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vxF "$tag" | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1 || true)
+            top=$(printf '%s\n%s\n' "$newest" "$version" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
+            if [ -n "$newest" ] && { [ "$newest" = "$version" ] || [ "$top" != "$version" ]; }; then
+              echo "Tag $tag is not newer than the published stable v$newest" >&2
+              exit 1
+            fi
+          else
+            channel=nightly
+            [ "$GITHUB_REF" = refs/heads/main ] || { echo "Nightly releases are built from main" >&2; exit 1; }
+            base=$(git tag --list 'v*' | sed 's/^v//' | grep -E "$semver" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1 || true)
+            [ -n "$base" ] || base=$(sed -n 's/^ *\.version = "\([^"]*\)",*$/\1/p' build.zig.zon)
+            [[ "$base" =~ $semver ]] || { echo "Cannot derive a base version from '$base'" >&2; exit 1; }
+            IFS=. read -r major minor patch <<< "$base"
+            date=$(date -u +%Y%m%d)
+            version="$major.$minor.$((patch + 1))-nightly.$date+$short"
+            tag="nightly-$date-$short"
+            tags=$(gh release list -R "$RELEASES_REPO" --exclude-drafts --limit 100 --json tagName --jq '.[].tagName')
+            if grep -qE "^nightly-[0-9]{8}-$short\$" <<< "$tags"; then
+              echo "A nightly for $short already exists"
+              skip=true
+            fi
+            green=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$sha&status=success&per_page=1" --jq '.total_count')
+            if [ "$green" = 0 ]; then
+              echo "CI has not succeeded for $sha"
+              skip=true
+            fi
+          fi
+          {
+            echo "channel=$channel"
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "skip=$skip"
+          } >> "$GITHUB_OUTPUT"
+      - name: Restore native dependencies
+        if: steps.v.outputs.skip != 'true'
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .zig-deps
+          key: zig-0.17.0-deps-tool-x86_64-linux-${{ hashFiles('zig/scripts/bootstrap-deps') }}
+      - name: Install checksum-pinned Zig and dependencies
+        if: steps.v.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/zig.tar.xz"
+          curl --fail --location --silent --show-error https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz -o "$archive"
+          printf '%s  %s\n' 1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026 "$archive" | shasum -a 256 -c -
+          tar -xf "$archive" -C "$RUNNER_TEMP"
+          printf '%s\n' "$RUNNER_TEMP/zig-x86_64-linux-0.17.0" >> "$GITHUB_PATH"
+          ./zig/scripts/bootstrap-deps
+      - name: Check the signing key
+        if: steps.v.outputs.skip != 'true'
+        env:
+          DOTLOCAL_SIGNING_KEY: ${{ secrets.DOTLOCAL_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          zig build release-tool -Doptimize=ReleaseSafe
+          ./zig-out/bin/dotlocal-release check-key release/public-key \
+            || { echo "DOTLOCAL_SIGNING_KEY does not match release/public-key" >&2; exit 1; }
+      - name: Create draft release
+        if: steps.v.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ steps.v.outputs.channel }}
+          VERSION: ${{ steps.v.outputs.version }}
+          TAG: ${{ steps.v.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Re-runs reuse an existing draft or published release; uploads clobber.
+          if gh release view "$TAG" -R "$RELEASES_REPO" >/dev/null 2>&1; then
+            echo "Release $TAG exists; reusing it"
+            exit 0
+          fi
+          flags=(--draft --title "dotlocal $VERSION" --notes "Built from $GITHUB_REPOSITORY@$GITHUB_SHA.")
+          # Stable tags already exist from the push; nightly tags are created
+          # at this commit when the draft is published.
+          if [ "$CHANNEL" = nightly ]; then flags+=(--prerelease --target "$GITHUB_SHA"); else flags+=(--verify-tag --latest=false); fi
+          gh release create "$TAG" -R "$RELEASES_REPO" "${flags[@]}"
+
+  build:
+    needs: version
+    if: needs.version.outputs.skip != 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Tests run natively; zig_target selects the shipped artifact's
+          # target and its dependencies are built for it in .zig-deps-release.
+          # macOS releases support macOS 13 and newer.
+          - target: aarch64-macos
+            runner: blacksmith-6vcpu-macos-latest
+            test: true
+            zig_target: aarch64-macos.13.0
+          # Blacksmith has no Intel macOS runners; cross-compile on Apple silicon.
+          - target: x86_64-macos
+            runner: blacksmith-6vcpu-macos-latest
+            test: false
+            zig_target: x86_64-macos.13.0
+          # Linux releases target glibc 2.28 (RHEL 8, Debian 10, Ubuntu 20.04 and newer).
+          - target: aarch64-linux
+            runner: blacksmith-4vcpu-ubuntu-2404-arm
+            test: true
+            zig_target: aarch64-linux-gnu.2.28
+          - target: x86_64-linux
+            runner: blacksmith-4vcpu-ubuntu-2404
+            test: true
+            zig_target: x86_64-linux-gnu.2.28
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      TARGET: ${{ matrix.target }}
+      ZIG_TARGET: ${{ matrix.zig_target }}
+      RUNS_NATIVELY: ${{ matrix.test }}
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Cache native dependencies
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            .zig-deps
+            .zig-deps-release
+          key: zig-0.17.0-deps-${{ matrix.target }}-${{ matrix.zig_target }}-${{ hashFiles('zig/scripts/bootstrap-deps') }}
+      - name: Install checksum-pinned Zig
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -s)-$(uname -m)" in
+            Darwin-arm64) architecture=aarch64; platform=macos; checksum=b607e9b9234790a008116ae5bdb71c6243b84b9fb42a53a9e70fde41c06c536a ;;
+            Darwin-x86_64) architecture=x86_64; platform=macos; checksum=4f9a1c5269aa17ebda5e6d3c2b89d6cbf36f7d2b22a0306e9ab98f25f95529c6 ;;
+            Linux-aarch64) architecture=aarch64; platform=linux; checksum=9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8 ;;
+            Linux-x86_64) architecture=x86_64; platform=linux; checksum=1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026 ;;
+            *) exit 1 ;;
+          esac
+          archive="$RUNNER_TEMP/zig.tar.xz"
+          curl --fail --location --silent --show-error "https://ziglang.org/download/0.17.0/zig-${architecture}-${platform}-0.17.0.tar.xz" -o "$archive"
+          printf '%s  %s\n' "$checksum" "$archive" | shasum -a 256 -c -
+          tar -xf "$archive" -C "$RUNNER_TEMP"
+          printf '%s\n' "$RUNNER_TEMP/zig-${architecture}-${platform}-0.17.0" >> "$GITHUB_PATH"
+      - name: Build native dependencies
+        if: matrix.test
+        run: ./zig/scripts/bootstrap-deps
+      - name: Build release dependencies
+        if: matrix.zig_target != ''
+        env:
+          DOTLOCAL_DEPS_TARGET: ${{ matrix.zig_target }}
+          DOTLOCAL_DEPS_PREFIX: ${{ github.workspace }}/.zig-deps-release
+        run: ./zig/scripts/bootstrap-deps
+      - name: Test
+        if: matrix.test
+        run: |
+          zig fmt --check build.zig zig
+          zig build test
+          zig build test -Doptimize=ReleaseSafe
+          zig build integration -Doptimize=ReleaseSafe
+          zig build example -Doptimize=ReleaseSafe
+      - name: Build and package
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags=(-Doptimize=ReleaseSafe "-Dversion=$VERSION")
+          if [ -n "$ZIG_TARGET" ]; then flags+=("-Dtarget=$ZIG_TARGET" "-Ddeps=$PWD/.zig-deps-release"); fi
+          rm -rf zig-out
+          zig build "${flags[@]}"
+          bin=zig-out/bin/dotlocal
+          file "$bin"
+          if [ "$RUNS_NATIVELY" = true ]; then
+            [ "$("$bin" version)" = "$VERSION" ]
+          elif [ "$(uname -s)" = Darwin ] && arch -x86_64 /usr/bin/true 2>/dev/null; then
+            [ "$(arch -x86_64 "$bin" version)" = "$VERSION" ]
+          else
+            echo "Cannot execute $ZIG_TARGET here; skipping the version check"
+          fi
+          if [ "$(uname -s)" = Darwin ]; then
+            minos=$(otool -l "$bin" | awk '/LC_BUILD_VERSION/ { found = 1 } found && $1 == "minos" { print $2; exit }')
+            [ "$minos" = 13.0 ] || { echo "dotlocal must target macOS 13.0, not '$minos'" >&2; exit 1; }
+          fi
+          if [ "$(uname -s)" = Linux ]; then
+            if objdump -p "$bin" | grep -E 'NEEDED.*(libssl|libcrypto|libnghttp2)'; then
+              echo "dotlocal must link OpenSSL and nghttp2 statically" >&2
+              exit 1
+            fi
+            if objdump -T "$bin" | grep -E 'GLIBC_2\.(29|[3-9][0-9])'; then
+              echo "dotlocal must not require glibc newer than 2.28" >&2
+              exit 1
+            fi
+          fi
+          # GitHub rewrites "+" in asset names, so drop semver build metadata.
+          name="dotlocal-${VERSION%%+*}-${TARGET#*-}-${TARGET%-*}.tar.gz"
+          stage=$(mktemp -d)
+          cp "$bin" README.md LICENSE "$stage/"
+          tar -czf "$name" -C "$stage" dotlocal README.md LICENSE
+          shasum -a 256 "$name" | awk '{print $1}' > "$name.sha256"
+          echo "ASSET=$name" >> "$GITHUB_ENV"
+      - name: Upload to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" "$ASSET" "$ASSET.sha256" -R "$RELEASES_REPO" --clobber
+
+  publish:
+    needs: [version, build]
+    if: needs.version.outputs.skip != 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      CHANNEL: ${{ needs.version.outputs.channel }}
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Restore native dependencies
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: .zig-deps
+          key: zig-0.17.0-deps-tool-x86_64-linux-${{ hashFiles('zig/scripts/bootstrap-deps') }}
+      - name: Install checksum-pinned Zig and dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/zig.tar.xz"
+          curl --fail --location --silent --show-error https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz -o "$archive"
+          printf '%s  %s\n' 1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026 "$archive" | shasum -a 256 -c -
+          tar -xf "$archive" -C "$RUNNER_TEMP"
+          printf '%s\n' "$RUNNER_TEMP/zig-x86_64-linux-0.17.0" >> "$GITHUB_PATH"
+          ./zig/scripts/bootstrap-deps
+      - name: Sign manifest and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOTLOCAL_SIGNING_KEY: ${{ secrets.DOTLOCAL_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          zig build release-tool -Doptimize=ReleaseSafe
+          tool="$PWD/zig-out/bin/dotlocal-release"
+          prefix="https://github.com/$RELEASES_REPO/releases/download"
+          # Prints manifest arguments for one release: TAG VERSION COMMIT PUBLISHED.
+          entry() {
+            local t=$1 v=$2 target name sum
+            printf '%s\n' "$v" "$3" "$4"
+            for target in aarch64-macos x86_64-macos aarch64-linux x86_64-linux; do
+              name="dotlocal-${v%%+*}-${target#*-}-${target%-*}.tar.gz"
+              sum=$(gh release download "$t" -R "$RELEASES_REPO" -p "$name.sha256" -O - | tr -d '[:space:]')
+              [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { echo "Bad checksum for $t/$name" >&2; return 1; }
+              printf '%s\n' "$target=$prefix/$t/$name@$sum"
+            done
+          }
+          args=("$CHANNEL" channel.json)
+          mapfile -t current < <(entry "$TAG" "$VERSION" "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+          [ "${#current[@]}" -eq 7 ] || { echo "Incomplete assets for $TAG" >&2; exit 1; }
+          args+=("${current[@]}")
+          if [ "$CHANNEL" = stable ]; then
+            # Keep the previous stable release in the signed manifest for rollback.
+            previous=$(gh release list -R "$RELEASES_REPO" --exclude-drafts --exclude-pre-releases --limit 100 --json tagName --jq '.[].tagName' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vxF "$TAG" | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1 || true)
+            if [ -n "$previous" ]; then
+              info=$(gh release view "v$previous" -R "$RELEASES_REPO" --json body,publishedAt)
+              commit=$(jq -r '.body' <<< "$info" | sed -n 's/.*@\([0-9a-f]\{40\}\).*/\1/p')
+              published=$(jq -r '.publishedAt' <<< "$info")
+              [ -n "$commit" ] || { echo "No source commit recorded for v$previous" >&2; exit 1; }
+              mapfile -t prior < <(entry "v$previous" "$previous" "$commit" "$published")
+              [ "${#prior[@]}" -eq 7 ] || { echo "Incomplete assets for v$previous" >&2; exit 1; }
+              args+=(-- "${prior[@]}")
+            fi
+          fi
+          "$tool" manifest "${args[@]}"
+          # Refuse to publish a manifest that shipped binaries cannot verify.
+          "$tool" verify channel.json release/public-key
+          if [ "$CHANNEL" = stable ]; then
+            gh release edit "$TAG" -R "$RELEASES_REPO" --draft=false --latest
+          else
+            gh release edit "$TAG" -R "$RELEASES_REPO" --draft=false
+          fi
+          # Channel manifests live at the root of the orphan `channels` branch.
+          gh auth setup-git
+          remote="https://github.com/$RELEASES_REPO.git"
+          repo="$RUNNER_TEMP/channels"
+          heads=0
+          git ls-remote --exit-code --heads "$remote" channels >/dev/null || heads=$?
+          if [ "$heads" = 0 ]; then
+            git clone -q --depth 1 --single-branch --branch channels "$remote" "$repo"
+          elif [ "$heads" = 2 ]; then
+            git init -q -b channels "$repo"
+            git -C "$repo" remote add origin "$remote"
+            cat > "$repo/README.md" <<'EOF'
+          # dotlocal release channels
+
+          Signed release manifests read by `dotlocal update` and `release/install.sh`.
+          This branch is written by the release workflow; do not edit it by hand.
+          EOF
+            git -C "$repo" add README.md
+          else
+            echo "Cannot read $RELEASES_REPO" >&2
+            exit 1
+          fi
+          cp channel.json "$repo/$CHANNEL.json"
+          cp channel.json.sig "$repo/$CHANNEL.json.sig"
+          git -C "$repo" add "$CHANNEL.json" "$CHANNEL.json.sig"
+          git -C "$repo" -c user.name=dotlocal-release -c user.email=dotlocal-release@users.noreply.github.com \
+            commit -q -m "Publish $VERSION ($CHANNEL)"
+          git -C "$repo" push origin HEAD:channels
+      - name: Prune old releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$CHANNEL" = stable ]; then
+            # Stable keeps the two newest by semver.
+            stale=$(gh release list -R "$RELEASES_REPO" --exclude-drafts --exclude-pre-releases --limit 100 --json tagName --jq '.[].tagName' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -t. -k1,1nr -k2,2nr -k3,3nr | tail -n +3 | sed 's/^/v/' || true)
+          else
+            stale=$(gh release list -R "$RELEASES_REPO" --exclude-drafts --limit 100 --json tagName,isPrerelease,publishedAt \
+              --jq 'map(select(.isPrerelease and (.tagName | startswith("nightly-")))) | sort_by(.publishedAt) | reverse | .[1:] | .[].tagName')
+          fi
+          while read -r tag; do
+            [ -n "$tag" ] || continue
+            [ "$tag" != "$TAG" ] || { echo "Refusing to prune the release just published" >&2; exit 1; }
+            if [ "$CHANNEL" = stable ]; then
+              # Stable tags stay in the source history; only the release goes.
+              gh release delete "$tag" -R "$RELEASES_REPO" --yes
+            else
+              gh release delete "$tag" -R "$RELEASES_REPO" --yes --cleanup-tag
+            fi
+          done <<< "$stale"
+
+  cleanup:
+    needs: [version, build, publish]
+    if: failure() && needs.version.outputs.tag != ''
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Delete failed draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Only drafts are removed; a published release is already in a manifest.
+          draft=$(gh release view "$TAG" -R "$RELEASES_REPO" --json isDraft --jq '.isDraft' 2>/dev/null || echo missing)
+          if [ "$draft" = true ]; then
+            gh release delete "$TAG" -R "$RELEASES_REPO" --yes
+          else
+            echo "No draft to delete for $TAG ($draft)"
+          fi

@@ -1,0 +1,4 @@
+{
+  "name": "demo",
+  "command": ["../../../zig-out/bin/dotlocal-demo"]
+}
