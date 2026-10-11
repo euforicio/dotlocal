@@ -122,6 +122,41 @@ test "user config fills only missing environment defaults" {
 
 const update = @import("../src/update.zig");
 
+test "real CLI update keeps executable permissions under launchd umask" {
+    const io = std.testing.io;
+    const executable = try std.Io.Dir.cwd().realPathFileAlloc(io, "zig-out/bin/dotlocal", a);
+    defer a.free(executable);
+    const version = try update.probeVersion(a, io, executable);
+    defer a.free(version);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, executable, a, .limited(128 << 20));
+    defer a.free(bytes);
+    try tmp.dir.writeFile(io, .{ .sub_path = "dotlocal", .data = bytes, .flags = .{ .permissions = .fromMode(0o755) } });
+    const archive = try std.fs.path.join(a, &.{ root, "dotlocal.tar.gz" });
+    defer a.free(archive);
+    const tar = try std.process.run(a, io, .{ .argv = &.{ "tar", "-czf", archive, "-C", root, "dotlocal" } });
+    defer a.free(tar.stdout);
+    defer a.free(tar.stderr);
+    try std.testing.expect(tar.term.success());
+    const compressed = try tmp.dir.readFileAlloc(io, "dotlocal.tar.gz", a, .limited(128 << 20));
+    defer a.free(compressed);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(compressed, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    const target = try std.fs.path.join(a, &.{ root, "installed" });
+    defer a.free(target);
+    const c = @import("../src/net.zig").c;
+    const old_mask = c.umask(0o077);
+    defer _ = c.umask(old_mask);
+    try update.install(a, io, compressed, &hex, version, target);
+    const installed = try tmp.dir.openFile(io, "installed", .{});
+    defer installed.close(io);
+    try std.testing.expectEqual(@as(std.posix.mode_t, 0o755), (try installed.stat(io)).permissions.toMode() & 0o7777);
+}
+
 fn writeExecutable(dir: std.Io.Dir, name: []const u8, version: []const u8) !void {
     const script = try std.fmt.allocPrint(a, "#!/bin/sh\n[ \"$1\" = version ] && echo {s}\n", .{version});
     defer a.free(script);

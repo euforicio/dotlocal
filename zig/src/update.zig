@@ -208,6 +208,9 @@ fn extractBinary(io: Io, archive: []const u8, dir: Io.Dir, name: []const u8) !vo
         var writer = out.writer(io, &buffer);
         try it.streamRemaining(entry, &writer.interface);
         try writer.interface.flush();
+        // launchd's 0077 umask must not make the installed service executable
+        // unreadable to the user's service version and health checks.
+        try out.setPermissions(io, .fromMode(0o755));
         try out.sync(io);
     }
     if (!found) return error.BinaryMissingFromArchive;
