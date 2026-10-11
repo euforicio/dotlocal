@@ -317,7 +317,9 @@ pub fn install(a: A, io: Io, config: Config, source: []const u8) !void {
     if (already_loaded) try command(a, io, &.{ "/bin/launchctl", "bootout", target });
     try command(a, io, &.{ "/bin/launchctl", "bootstrap", "system", config.plist_path });
     try command(a, io, &.{ "/bin/launchctl", "enable", target });
-    try command(a, io, &.{ "/bin/launchctl", "kickstart", "-k", target });
+    // Bootstrap may already be starting the daemon. Killing it here can leave
+    // its management socket behind before signal handlers are installed.
+    try command(a, io, &.{ "/bin/launchctl", "kickstart", target });
     if (!try loaded(a, io, config)) return error.ServiceNotLoaded;
     const deadline = Io.Clock.awake.now(io).nanoseconds + 10 * std.time.ns_per_s;
     while (Io.Clock.awake.now(io).nanoseconds < deadline) {
