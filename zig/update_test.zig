@@ -58,7 +58,47 @@ pub fn main(init: std.process.Init) !void {
     try disabled(&ctx);
     try background(&ctx);
     try installer(&ctx, paths[3]);
+    try brewBootstrap(&ctx);
     std.debug.print("PASS self-update and installer against signed local HTTPS releases\n", .{});
+}
+
+/// Real packaged binaries, signed self-updates, and a later Brew replacement.
+fn brewBootstrap(ctx: *Ctx) !void {
+    const f = ctx.f;
+    const bundle = try std.fs.path.join(f.a, &.{ try dir(f, "Cellar/dotlocal/1/libexec"), "dotlocal" });
+    const home = try dir(f, "brew-home");
+    var env = try f.env.clone(f.a);
+    defer env.deinit();
+    try env.put("HOME", home);
+    try std.Io.Dir.copyFileAbsolute(ctx.v1, bundle, f.io, .{ .replace = true });
+    try t.equal(try brewVersion(f, bundle, &env), "0.1.0");
+    const runtime = try std.fs.path.join(f.a, &.{ home, ".dotlocal/bin/dotlocal" });
+    _ = try run(f, &.{ bundle, "__brew-launch", "status" }, &env);
+    for (0..300) |_| {
+        if (std.mem.eql(u8, try brewVersion(f, bundle, &env), "0.2.0")) break;
+        try std.Io.sleep(f.io, .fromMilliseconds(100), .awake);
+    }
+    try t.equal(try brewVersion(f, bundle, &env), "0.2.0");
+    _ = try run(f, &.{ bundle, "__brew-launch", "update" }, &env);
+    try t.equal(try brewVersion(f, bundle, &env), "0.2.0");
+    try t.check(std.mem.eql(u8, &try digest(f, bundle), &try digest(f, ctx.v1)), "self-update modified the Brew bundle");
+    _ = try run(f, &.{ bundle, "__brew-launch", "update", "--version", "0.1.0" }, &env);
+    try std.Io.Dir.copyFileAbsolute(ctx.v2, bundle, f.io, .{ .replace = true });
+    try t.equal(try brewVersion(f, bundle, &env), "0.1.0");
+    _ = try run(f, &.{ bundle, "__brew-launch", "config", "unset", "pin" }, &env);
+    try t.equal(try brewVersion(f, bundle, &env), "0.2.0");
+    // An older Brew bundle must not roll back the newer signed runtime.
+    try std.Io.Dir.copyFileAbsolute(ctx.v1, bundle, f.io, .{ .replace = true });
+    try t.equal(try brewVersion(f, bundle, &env), "0.2.0");
+    try t.check(try mode(f, runtime) == 0o755, "Brew runtime is not executable");
+    if (t.c.chmod(try f.a.dupeSentinel(u8, runtime, 0), 0o777) != 0) return error.PermissionsFailed;
+    const unsafe = try std.process.run(f.a, f.io, .{ .argv = &.{ bundle, "__brew-launch", "version" }, .environ_map = &env });
+    try t.check(!unsafe.term.success() and std.mem.indexOf(u8, unsafe.stderr, "UnsafeStateFile") != null, "unsafe Brew runtime was executed");
+    std.debug.print("PASS Brew bootstrap, signed automatic CLI update, unchanged bundle, pinned rollback, Brew catch-up and unsafe runtime rejection\n", .{});
+}
+
+fn brewVersion(f: *t.Fixture, bundle: []const u8, env: *const std.process.Environ.Map) ![]const u8 {
+    return std.mem.trim(u8, (try run(f, &.{ bundle, "__brew-launch", "version" }, env)).stdout, " \r\n");
 }
 
 /// check, update, rollback with pin, pin blocks background, update unpins.

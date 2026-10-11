@@ -43,6 +43,22 @@ are written in Zig.
 
 ## Install
 
+Homebrew (macOS and Linux, ARM64 and x86_64):
+
+```sh
+brew install euforicio/taps/dotlocal
+```
+
+Both the CLI and installed macOS daemon retain signed automatic updates.
+Homebrew owns an immutable launcher and bundled binary; the launcher runs an
+independent user-owned copy at `~/.dotlocal/bin/dotlocal`. A Brew upgrade advances
+that copy only when its bundled version is newer; an explicit version pin is
+preserved. `brew info dotlocal` reports the package version, while `dotlocal version`
+reports the running version. The tap follows verified stable releases hourly.
+Privileged listeners and certificate trust require explicit `dotlocal init` setup.
+
+Or install directly:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/euforicio/dotlocal/main/release/install.sh | sh
 ```
@@ -64,7 +80,7 @@ Update now with `dotlocal update`; roll back to the previous stable release with
 then run `dotlocal init` to roll back the installed service too. Stable keeps
 the two newest releases; if both are bad, a known-good commit is re-tagged as a
 new, higher version.
-Installs under Homebrew or Nix are left to their package manager. See the
+Nix installations are left to their package manager. See the
 [update reference](zig/README.md#updates-and-user-configuration).
 
 ## Quick start
