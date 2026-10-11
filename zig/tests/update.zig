@@ -135,6 +135,14 @@ test "real CLI update keeps executable permissions under launchd umask" {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, executable, a, .limited(128 << 20));
     defer a.free(bytes);
     try tmp.dir.writeFile(io, .{ .sub_path = "dotlocal", .data = bytes, .flags = .{ .permissions = .fromMode(0o755) } });
+    // Debug ELF binaries exceed the production archive limit. Remove only
+    // debug metadata from this private copy, as published executables do.
+    const copied = try std.fs.path.join(a, &.{ root, "dotlocal" });
+    defer a.free(copied);
+    const stripped = try std.process.run(a, io, .{ .argv = &.{ "strip", copied } });
+    defer a.free(stripped.stdout);
+    defer a.free(stripped.stderr);
+    try std.testing.expect(stripped.term.success());
     const archive = try std.fs.path.join(a, &.{ root, "dotlocal.tar.gz" });
     defer a.free(archive);
     const tar = try std.process.run(a, io, .{ .argv = &.{ "tar", "-czf", archive, "-C", root, "dotlocal" } });
