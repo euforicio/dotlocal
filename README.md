@@ -52,7 +52,7 @@ brew install euforicio/taps/dotlocal
 Both the CLI and installed macOS daemon retain signed automatic updates.
 Homebrew owns an immutable launcher and bundled binary; the launcher runs an
 independent user-owned copy at `~/.dotlocal/bin/dotlocal`. A Brew upgrade advances
-that copy only when its bundled version is newer; an explicit version pin is
+that copy only when its bundled version is newer; an explicit version pin or nightly channel selection is
 preserved. `brew info dotlocal` reports the package version, while `dotlocal version`
 reports the running version. The tap follows verified stable releases hourly.
 Privileged listeners and certificate trust require explicit `dotlocal init` setup.

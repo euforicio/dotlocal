@@ -85,7 +85,10 @@ fn brewBootstrap(ctx: *Ctx) !void {
     _ = try run(f, &.{ bundle, "__brew-launch", "update", "--version", "0.1.0" }, &env);
     try std.Io.Dir.copyFileAbsolute(ctx.v2, bundle, f.io, .{ .replace = true });
     try t.equal(try brewVersion(f, bundle, &env), "0.1.0");
+    _ = try run(f, &.{ bundle, "__brew-launch", "config", "set", "channel", "nightly" }, &env);
     _ = try run(f, &.{ bundle, "__brew-launch", "config", "unset", "pin" }, &env);
+    try t.equal(try brewVersion(f, bundle, &env), "0.1.0");
+    _ = try run(f, &.{ bundle, "__brew-launch", "config", "set", "channel", "stable" }, &env);
     try t.equal(try brewVersion(f, bundle, &env), "0.2.0");
     // An older Brew bundle must not roll back the newer signed runtime.
     try std.Io.Dir.copyFileAbsolute(ctx.v1, bundle, f.io, .{ .replace = true });

@@ -134,13 +134,14 @@ pub fn main(init: std.process.Init) void {
         std.process.exit(1);
     };
     const command: ?[]const u8 = if (args.len > 1) args[1] else null;
-    cli_update.applyUserConfig(init, command) catch std.process.exit(1);
     if (command) |name| if (eq(name, "__brew-launch")) {
+        cli_update.applyUserConfig(init, if (args.len > 2) args[2] else null) catch std.process.exit(1);
         @import("cli_brew.zig").launch(init, args[2..]) catch |err| {
             std.log.err("dotlocal: {s}", .{@errorName(err)});
             std.process.exit(1);
         };
     };
+    cli_update.applyUserConfig(init, command) catch std.process.exit(1);
     cli_update.reportBackground(init, command);
     const code = execute(init, args[1..]) catch |err| blk: {
         std.log.err("dotlocal: {s}", .{@errorName(err)});

@@ -204,7 +204,7 @@ The Homebrew formula installs a launcher that invokes the bundled binary's
 `__brew-launch` entry point. It validates home/state/runtime ownership and
 permissions, creates `~/.dotlocal/bin/dotlocal` atomically under the updater lock,
 and executes that copy. Signed CLI updates replace only the user copy. A newer
-Brew bundle advances the runtime unless a version is pinned; older bundles never
+Brew bundle advances the runtime unless a version is pinned or the nightly channel is selected; older bundles never
 downgrade it. Root bypasses the user copy and runs the bundled binary directly.
 Brew's receipt tracks the bundle, so `brew info` can lag `dotlocal version`.
 The service retains signed automatic updates and its existing downgrade guard.
