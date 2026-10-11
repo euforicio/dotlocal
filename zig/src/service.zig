@@ -275,6 +275,28 @@ fn verifyArtifact(a: A, path: []const u8) !void {
     var stat: c.struct_stat = undefined;
     if (file_stat.fstat(fd, &stat) != 0 or (stat.st_mode & c.S_IFMT) != c.S_IFREG or stat.st_uid != 0 or stat.st_gid != 0 or (stat.st_mode & 0o022) != 0) return error.UnsafeArtifact;
 }
+
+// Called only after the service is unloaded and its runtime directory has
+// been validated. A live listener, foreign artifact or changed inode is kept.
+fn removeStoppedSocket(a: A, path: []const u8, owner: c.uid_t, gid: u32) !void {
+    const net = @import("net.zig");
+    const z = try a.dupeSentinel(u8, path, 0);
+    defer a.free(z);
+    var before: c.struct_stat = undefined;
+    if (file_stat.lstat(z, &before) != 0) return if (net.errno() == c.ENOENT) {} else error.ServiceWriteFailed;
+    if ((before.st_mode & c.S_IFMT) != c.S_IFSOCK or before.st_uid != owner or before.st_gid != gid or (before.st_mode & 0o002) != 0) return error.UnsafeArtifact;
+    var address = try net.unixAddress(path);
+    const fd = c.socket(c.AF_UNIX, c.SOCK_STREAM, 0);
+    if (fd < 0) return error.SocketFailed;
+    defer net.close(fd);
+    net.configure(fd, 1);
+    if (c.connect(fd, @ptrCast(&address), @sizeOf(@TypeOf(address))) == 0) return error.SocketInUse;
+    if (net.errno() != c.ECONNREFUSED) return error.UnsafeArtifact;
+    var after: c.struct_stat = undefined;
+    if (file_stat.lstat(z, &after) != 0 or before.st_dev != after.st_dev or before.st_ino != after.st_ino) return error.UnsafeArtifact;
+    if (c.unlink(z) != 0) return error.ServiceWriteFailed;
+}
+
 pub fn install(a: A, io: Io, config: Config, source: []const u8) !void {
     try validate(a, config);
     try root();
@@ -315,9 +337,13 @@ pub fn install(a: A, io: Io, config: Config, source: []const u8) !void {
     const already_loaded = try loaded(a, io, config);
     if (!binary_changed and !plist_changed and already_loaded and running(a, io, config)) return;
     if (already_loaded) try command(a, io, &.{ "/bin/launchctl", "bootout", target });
+    if (try loaded(a, io, config)) return error.ServiceStillLoaded;
+    try removeStoppedSocket(a, config.management_socket, 0, gid);
     try command(a, io, &.{ "/bin/launchctl", "bootstrap", "system", config.plist_path });
     try command(a, io, &.{ "/bin/launchctl", "enable", target });
-    try command(a, io, &.{ "/bin/launchctl", "kickstart", "-k", target });
+    // Bootstrap may already be starting the daemon. Killing it here can leave
+    // its management socket behind before signal handlers are installed.
+    try command(a, io, &.{ "/bin/launchctl", "kickstart", target });
     if (!try loaded(a, io, config)) return error.ServiceNotLoaded;
     const deadline = Io.Clock.awake.now(io).nanoseconds + 10 * std.time.ns_per_s;
     while (Io.Clock.awake.now(io).nanoseconds < deadline) {
@@ -676,4 +702,32 @@ test "service directories left by uninstall are repaired in place" {
     try std.testing.expectError(error.UnsafeArtifact, ownedDir(link, 0o700, gid, uid));
     try std.testing.expectEqual(@as(c_int, 0), file_stat.stat(statez, &stat));
     try std.testing.expectEqual(@as(u32, 0o755), @as(u32, @intCast(stat.st_mode & 0o7777)));
+}
+
+test "stopped service socket cleanup preserves live and foreign artifacts" {
+    const net = @import("net.zig");
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root_path);
+    const path = try std.fmt.allocPrint(a, "{s}/s", .{root_path});
+    defer a.free(path);
+    const uid = c.geteuid();
+    const gid: u32 = @intCast(c.getegid());
+    var fd = try net.listenUnix(a, path);
+    defer if (fd >= 0) net.close(fd);
+    try std.testing.expectError(error.SocketInUse, removeStoppedSocket(a, path, uid, gid));
+    try std.testing.expectError(error.UnsafeArtifact, removeStoppedSocket(a, path, uid + 1, gid));
+    net.close(fd);
+    fd = -1;
+    try removeStoppedSocket(a, path, uid, gid);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(io, "s", .{}));
+    try removeStoppedSocket(a, path, uid, gid);
+    try tmp.dir.writeFile(io, .{ .sub_path = "s", .data = "keep" });
+    try std.testing.expectError(error.UnsafeArtifact, removeStoppedSocket(a, path, uid, gid));
+    const kept = try tmp.dir.readFileAlloc(io, "s", a, .limited(16));
+    defer a.free(kept);
+    try std.testing.expectEqualStrings("keep", kept);
 }
