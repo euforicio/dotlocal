@@ -224,7 +224,7 @@ fn frameCallback(session: ?*c.nghttp2_session, frame: [*c]const c.nghttp2_frame,
     const id = frame.*.hd.stream_id;
     if (frame.*.hd.type == c.NGHTTP2_HEADERS and !state.started) {
         state.started = true;
-        prepareRequest(conn, session, id, state) catch {
+        prepareRequest(conn, session, id, state, frame.*.hd.flags & c.NGHTTP2_FLAG_END_STREAM != 0) catch {
             state.completed = true;
             submit(session, id, state, 502, &.{}, "bad gateway\n") catch return c.NGHTTP2_ERR_CALLBACK_FAILURE;
         };
@@ -256,7 +256,7 @@ fn submit(session: ?*c.nghttp2_session, id: i32, state: *StreamState, status: u1
     var provider: c.nghttp2_data_provider2 = .{ .source = .{ .ptr = state }, .read_callback = readResponse };
     if (c.nghttp2_submit_response2(session, id, fields.ptr, fields.len, if (body.len == 0 and !live) null else &provider) != 0) return error.Http2SubmitFailed;
 }
-fn prepareRequest(conn: *Connection, session: ?*c.nghttp2_session, id: i32, state: *StreamState) !void {
+fn prepareRequest(conn: *Connection, session: ?*c.nghttp2_session, id: i32, state: *StreamState, end_stream: bool) !void {
     const a = state.allocator();
     const method = state.get(":method") orelse return submit(session, id, state, 400, &.{}, "missing method\n");
     if (!proxy.validToken(method)) return submit(session, id, state, 400, &.{}, "invalid method\n");
@@ -272,6 +272,7 @@ fn prepareRequest(conn: *Connection, session: ?*c.nghttp2_session, id: i32, stat
     const request_head: proxy.Head = .{ .first = "", .raw = "", .headers = state.headers.items };
     const request_framing = proxy.framing(request_head) catch return submit(session, id, state, 400, &.{}, "invalid request framing\n");
     if (request_framing.chunked) return submit(session, id, state, 400, &.{}, "invalid HTTP2 transfer encoding\n");
+    if (end_stream and (request_framing.length orelse 0) != 0) return submit(session, id, state, 400, &.{}, "invalid request framing\n");
     _ = proxy.trailerNames(a, request_head) catch return submit(session, id, state, 400, &.{}, "invalid trailers\n");
     if (state.get("expect")) |expect| if (!std.ascii.eqlIgnoreCase(expect, "100-continue")) return submit(session, id, state, 417, &.{}, "expectation failed\n");
     _ = proxy.proxyHops(state.get("x-dotlocal-hops")) catch |err| return submit(session, id, state, if (err == error.ProxyLoop) 508 else 400, &.{}, "invalid proxy hops\n");
@@ -281,6 +282,7 @@ fn prepareRequest(conn: *Connection, session: ?*c.nghttp2_session, id: i32, stat
     state.authority = authority;
     if (state.websocket and request_framing.length != null and request_framing.length.? != 0) return submit(session, id, state, 400, &.{}, "invalid WebSocket framing\n");
     state.upload_remaining = if (state.websocket) null else request_framing.length;
+    state.upload_chunked = !end_stream;
     if (state.get("expect") != null) try submitInformational(session, id, a, 100, &.{});
     if (c.socketpair(c.AF_UNIX, c.SOCK_STREAM, 0, &state.upload_pipe) != 0) return error.SocketFailed;
     for (state.upload_pipe) |fd| net.configure(fd, 30);
@@ -332,10 +334,12 @@ fn exchangeUpstream(conn: *Connection, state: *StreamState) !void {
         if (header.name[0] == ':' or proxy.hop(head, header.name) or proxy.forwardingHeader(header.name) or std.mem.eql(u8, header.name, "host") or std.mem.eql(u8, header.name, "content-length") or std.mem.eql(u8, header.name, "expect")) continue;
         try request.writer.print("{s}: {s}\r\n", .{ header.name, header.value });
     }
-    // HTTP/2 permits trailing HEADERS without a declaration in the initial block.
-    state.upload_chunked = true;
-    try request.writer.writeAll("Transfer-Encoding: chunked\r\n");
-    try proxy.writeTrailerNames(&request.writer, names);
+    // An initial END_STREAM means there is no body or trailing HEADERS.
+    // Do not send an empty chunk terminator that a closing backend may leave unread.
+    if (state.upload_chunked) {
+        try request.writer.writeAll("Transfer-Encoding: chunked\r\n");
+        try proxy.writeTrailerNames(&request.writer, names);
+    } else try request.writer.writeAll("Content-Length: 0\r\n");
     try request.writer.print("Connection: close\r\nX-Forwarded-For: {s}\r\nX-Forwarded-Host: {s}\r\nX-Forwarded-Proto: {s}\r\nX-dotlocal-Proxy-Hop: 1\r\nX-dotlocal-Hops: {d}\r\n\r\n", .{ conn.remote, public_authority, conn.config.scheme, (try proxy.proxyHops(state.get("x-dotlocal-hops"))) + 1 });
     try up.writeAll(request.written());
     state.pending_upstream = up;
@@ -968,6 +972,7 @@ fn exchangeTest(reg: anytype, config: profile.Config, authority: []const u8, pat
 const TableBackend = struct {
     listener: c_int,
     delay_us: c_uint = 0,
+    body: []const u8 = "table backed\n",
     err: ?anyerror = null,
     fn run(self: *TableBackend) void {
         self.serve() catch |err| {
@@ -986,14 +991,14 @@ const TableBackend = struct {
         if (!std.mem.eql(u8, request.first, "GET /table HTTP/1.1")) return error.InvalidRequest;
         const forwarded = request.get("x-forwarded-host") orelse return error.InvalidRequest;
         if (!std.mem.eql(u8, forwarded, "app.local:18080")) return error.InvalidRequest;
-        var end: [5]u8 = undefined;
-        try readExact(stream, &end);
-        if (!std.mem.eql(u8, &end, "0\r\n\r\n")) return error.InvalidRequest;
+        if (request.get("transfer-encoding") != null or !std.mem.eql(u8, request.get("content-length") orelse "", "0")) return error.InvalidRequest;
         if (self.delay_us != 0) _ = c.usleep(self.delay_us);
-        try stream.writeAll("HTTP/1.1 200 OK\r\nContent-Length: 13\r\nConnection: close\r\n\r\ntable backed\n");
+        var header: [128]u8 = undefined;
+        try stream.writeAll(try std.fmt.bufPrint(&header, "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{self.body.len}));
+        try stream.writeAll(self.body);
     }
 };
-fn tableExchange(delay_us: c_uint, idle_ms: c_int) !void {
+fn tableExchange(delay_us: c_uint, idle_ms: c_int, body: []const u8) !void {
     const a = std.testing.allocator;
     const listener = try net.tcp(a, "127.0.0.1", 0, true);
     defer net.close(listener);
@@ -1005,19 +1010,19 @@ fn tableExchange(delay_us: c_uint, idle_ms: c_int) !void {
     var table = try routes.Table.init(a, ".local", false);
     defer table.deinit();
     try table.set(.{ .name = "app.local", .scheme = "http", .host = "127.0.0.1", .port = port });
-    var backend: TableBackend = .{ .listener = listener, .delay_us = delay_us };
+    var backend: TableBackend = .{ .listener = listener, .delay_us = delay_us, .body = body };
     const thread = try std.Thread.spawn(.{}, TableBackend.run, .{&backend});
-    const result = exchangeTest(&table, .{ .scheme = "http", .listen = "127.0.0.1:18080", .tld = ".local" }, "app.local", "/table", 200, "table backed\n", idle_ms);
+    const result = exchangeTest(&table, .{ .scheme = "http", .listen = "127.0.0.1:18080", .tld = ".local" }, "app.local", "/table", 200, body, idle_ms);
     thread.join();
     try result;
     if (backend.err) |err| return err;
 }
 test "real HTTP2 session routes through an ephemeral LAN table" {
-    try tableExchange(0, 30_000);
+    try tableExchange(0, 30_000, "table backed\n");
 }
 test "HTTP2 idle timeout does not close a connection awaiting an upstream response" {
     // The backend answers well after the idle timeout with no client traffic in between.
-    try tableExchange(600_000, 100);
+    try tableExchange(600_000, 100, "table backed\n");
 }
 
 /// Requests with a zero initial stream window, waits for the response head,
@@ -1187,4 +1192,11 @@ test "reset uploads return undrained bytes to the connection window" {
         try flush(session, stream);
     }
     try std.testing.expect(c.nghttp2_session_get_remote_window_size(session) <= 65535);
+}
+
+test "HTTP2 bodyless HEADERS preserve a large closing backend response" {
+    const body = try std.testing.allocator.alloc(u8, 192 * 1024);
+    defer std.testing.allocator.free(body);
+    for (body, 0..) |*byte, i| byte.* = @intCast(i % 251);
+    try tableExchange(0, 30_000, body);
 }

@@ -306,6 +306,13 @@ Functions take explicit allocators and `std.Io` where applicable. Returned route
 
 Automated checks cover private route validation, exact/wildcard policy, owner compare-and-set, real durable files, strict wire fields, process identity/group checks, signal escalation, busy/dynamic ports, project configuration, live adapter capability checks, launchd parsing, strict TLS, HTTPS upstream verification, HTTP/1 streaming, redirects, real WebSocket frames, HTTP/2 large uploads/downloads and SSE, IPv6 loopback, custom profiles, secure restart.
 
+HTTP/2 requests completed in their initial HEADERS use `Content-Length: 0` when
+forwarded to HTTP/1 backends. Open request streams retain chunked bodies and
+trailers. This avoids unread empty chunk terminators resetting large responses
+from backends that close immediately after replying. macOS installation polls
+for launchd unloading with a ten-second deadline and bounded probes before
+bootstrapping the service.
+
 Validation commands cover Debug and ReleaseSafe builds, real socket and certificate tests, full HTTP/TLS integration, and a separate `b.dependency` consumer. Optional integration gates report explicit skips when their native prerequisite or opt-in is absent.
 
 Real LAN HTTPS over HTTP/1 and HTTP/2, exact Host/SNI validation, mDNS advertisement, listener polling and owned-child cleanup passed. Rebinding retained the port and CA and updated the exact advertising-child journal; journal failure withdrew the replacement. The running Apple Container adapter gate also passed.

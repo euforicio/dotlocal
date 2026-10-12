@@ -337,7 +337,12 @@ pub fn install(a: A, io: Io, config: Config, source: []const u8) !void {
     const already_loaded = try loaded(a, io, config);
     if (!binary_changed and !plist_changed and already_loaded and running(a, io, config)) return;
     if (already_loaded) try command(a, io, &.{ "/bin/launchctl", "bootout", target });
-    if (try loaded(a, io, config)) return error.ServiceStillLoaded;
+    // bootout can return before launchd has removed the service from its domain.
+    const unloaded_deadline = Io.Clock.awake.now(io).nanoseconds + 10 * std.time.ns_per_s;
+    while (try loaded(a, io, config)) {
+        if (Io.Clock.awake.now(io).nanoseconds >= unloaded_deadline) return error.ServiceStillLoaded;
+        try Io.sleep(io, .fromMilliseconds(50), .awake);
+    }
     try removeStoppedSocket(a, config.management_socket, 0, gid);
     try command(a, io, &.{ "/bin/launchctl", "bootstrap", "system", config.plist_path });
     try command(a, io, &.{ "/bin/launchctl", "enable", target });
