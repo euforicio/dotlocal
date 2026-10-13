@@ -261,3 +261,5 @@ your change. Open an [issue](https://github.com/euforicio/dotlocal/issues) or
 ## License
 
 dotlocal is released under the [MIT License](LICENSE).
+
+[Shared shipping queue](.agents/ship.md): batch ready changes, retain full main safety runs, and record exact validation receipts.
