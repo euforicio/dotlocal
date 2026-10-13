@@ -73,7 +73,7 @@ jobs:
   acceptance-status:
     name: Publish acceptance status
     needs: zig
-    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: always() && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
