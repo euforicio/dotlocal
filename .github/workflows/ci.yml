@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   zig:
@@ -68,3 +68,36 @@ jobs:
           zig build example -Doptimize=ReleaseSafe "-Dtarget=$ZIG_TARGET" -frosetta
       - name: Benchmark real paths
         run: zig build bench -Doptimize=ReleaseSafe "-Dtarget=$ZIG_TARGET" -frosetta
+
+  # Separate publisher: no checkout or candidate code gets status-write access.
+  acceptance-status:
+    name: Publish acceptance status
+    needs: zig
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      statuses: write
+    steps:
+      - name: Publish the actual validator result for branch rules
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VALIDATION_RESULT: ${{ needs.zig.result }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          state=failure
+          if [ "$VALIDATION_RESULT" = success ]; then state=success; fi
+          gh api "repos/$REPOSITORY/statuses/$COMMIT" --method POST \
+            -f state="$state" -f context='Zig 0.17.0 (macOS)' \
+            -f target_url="$RUN_URL" -f description="Candidate validation: $VALIDATION_RESULT" > /dev/null
+          gh api "repos/$REPOSITORY/statuses/$COMMIT" --method POST \
+            -f state="$state" -f context='Zig 0.17.0 (Linux)' \
+            -f target_url="$RUN_URL" -f description="Candidate validation: $VALIDATION_RESULT" > /dev/null
+          gh api "repos/$REPOSITORY/statuses/$COMMIT" --method POST \
+            -f state="$state" -f context='Zig 0.17.0 (Linux ARM64)' \
+            -f target_url="$RUN_URL" -f description="Candidate validation: $VALIDATION_RESULT" > /dev/null
+          gh api "repos/$REPOSITORY/statuses/$COMMIT" --method POST \
+            -f state="$state" -f context='Zig 0.17.0 (macOS Intel (Rosetta))' \
+            -f target_url="$RUN_URL" -f description="Candidate validation: $VALIDATION_RESULT" > /dev/null

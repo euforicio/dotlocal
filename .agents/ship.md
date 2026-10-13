@@ -1,8 +1,8 @@
 # Ship changes through the shared queue
 
-Repository: `euforicio/dotlocal`. Candidate acceptance is configured. Activation still requires the shared identity, environment and branch protections.
+Repository: `euforicio/dotlocal`. Candidate acceptance is configured. Queue activation remains off until the rollout PR passes, branch rules are installed, and the repository-specific check-mode pilot succeeds.
 
-Read the [shared shipping guide](https://github.com/euforicio/orion-infra/blob/main/docs/agent-shipping.md).
+Read the [shared shipping guide](https://github.com/euforicio/orion-infra/blob/shipping-control/docs/agent-shipping.md).
 Use an operator-controlled coordinator checkout at `RIFT_SHIPPING_HOME`.
 
 1. Follow this repository's required validation and review instructions. Work on a separate branch; capture the reviewed main base SHA. Never push main from the editing agent.
